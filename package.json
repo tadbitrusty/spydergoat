@@ -1,0 +1,16 @@
+{
+  "name": "spydergoat",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Real-time MJD clock API",
+  "main": "src/api/worker.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "author": "Adam",
+  "license": "MIT",
+  "devDependencies": {
+    "wrangler": "^3.0.0"
+  }
+}
