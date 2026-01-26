@@ -22,6 +22,9 @@ database_id = "7a4439ad-a213-432e-a1cd-e14065f60df2"
 
 [vars]
 ENVIRONMENT = "production"
+# Create Payment Link in Stripe Dashboard, then paste URL here
+# Make sure to set success URL to: https://spydergoat.com/success?session_id={CHECKOUT_SESSION_ID}
+STRIPE_CHECKOUT_URL = "https://buy.stripe.com/aFa14od6oaK40TL1en7Re01"
 
 [dev]
 port = 8787
