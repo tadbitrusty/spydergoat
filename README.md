@@ -1,10 +1,10 @@
 # SpyderGoat 🐐
 
-**Trusted time for software that needs receipts. One API call.**
+**External server-time receipts for software. One API call.**
 
-AI agents hallucinate the date. Local clocks drift. Timezones lie in wait like tiny bureaucratic demons. SpyderGoat is a dead-simple external time anchor for agents, audit trails, scientific systems, distributed jobs, and any workflow that needs a small timestamp receipt without dragging in a heavy dependency.
+AI agents can guess the date. Local clocks can drift. Timezones lie in wait like tiny bureaucratic demons. SpyderGoat is a dead-simple external server-time reference for agents, audit trails, scientific systems, distributed jobs, and workflows that need a compact timestamp receipt without dragging in a heavy dependency.
 
-SpyderGoat is NTP-shaped truth for AI and software.
+SpyderGoat is an HTTP time receipt derived from the Cloudflare Worker clock. It is not NTP, an atomic-clock feed, a signed timestamp authority, or an accuracy SLA.
 
 ## The Problem
 
