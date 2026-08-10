@@ -1,3 +1,4 @@
+import { StrictMode } from 'react';
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -64,6 +65,17 @@ describe('SpyderGoat v1.1', () => {
     expect(fetchMock).toHaveBeenCalledWith('/mjd', expect.objectContaining({ headers: { Accept: 'application/json' } }));
     expect(await screen.findByText(/calibrated from spydergoat/i)).toBeInTheDocument();
     expect(document.querySelector('time')?.getAttribute('datetime')).toMatch(/^2026-08-10T12:00:00\.\d{3}Z$/);
+  });
+
+  it('recovers from calibration failure under the development StrictMode root', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 429 }));
+    const user = userEvent.setup();
+
+    render(<StrictMode><App /></StrictMode>);
+    await user.click(screen.getByRole('button', { name: /calibrate/i }));
+
+    expect(await screen.findByText(/calibration unavailable/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /try again/i })).toBeEnabled();
   });
 
   it('fails gracefully when calibration is rate-limited or unavailable', async () => {
