@@ -15,6 +15,12 @@ type ClockState = {
 
 const MJD_UNIX_EPOCH = 40_587;
 const MS_PER_DAY = 86_400_000;
+const DOCUMENTED_RECEIPT: TimeReceipt = {
+  mjd: 61_262.5,
+  utc: '2026-08-10T12:00:00.000Z',
+  unix: 1_786_363_200,
+  source: 'server',
+};
 
 function localFallback(): TimeReceipt {
   const now = Date.now();
@@ -152,11 +158,12 @@ const whyCards = [
 export default function App() {
   const { display, status, loading, calibrate } = useTimeReceipt();
   const [copied, setCopied] = useState(false);
+  const documentedReceipt = display.source === 'server' ? display : DOCUMENTED_RECEIPT;
   const responseExample = JSON.stringify({
-    mjd: Number(display.mjd.toFixed(8)),
-    utc: display.utc,
-    unix: display.unix,
-    source: display.source,
+    mjd: Number(documentedReceipt.mjd.toFixed(8)),
+    utc: documentedReceipt.utc,
+    unix: documentedReceipt.unix,
+    source: documentedReceipt.source,
   }, null, 2);
 
   async function copyExample() {
@@ -214,7 +221,7 @@ export default function App() {
               <div className="epoch"><i /><strong>JD 0</strong><span>4713 BCE</span></div>
               <div className="epoch"><i /><strong>MJD 0</strong><span>17 Nov 1858</span></div>
               <div className="epoch"><i /><strong>MJD 40587</strong><span>Unix epoch · 1970</span></div>
-              <div className="epoch active"><i /><strong>MJD {Math.floor(display.mjd)}</strong><span>Server-derived today</span></div>
+              <div className="epoch active"><i /><strong>MJD {Math.floor(display.mjd)}</strong><span>{display.source === 'server' ? 'Server-derived today' : 'Browser-derived preview'}</span></div>
             </div>
             <figcaption>MJD = JD − 2,400,000.5 <span>·</span> The fractional part represents time of day on the stated scale.</figcaption>
           </figure>

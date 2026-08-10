@@ -26,6 +26,10 @@ describe('SpyderGoat v1.1', () => {
 
     expect(screen.getByRole('heading', { level: 1, name: /external time reference/i })).toBeInTheDocument();
     expect(screen.getAllByText(/browser preview/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/browser-derived preview/i)).toBeInTheDocument();
+    expect(screen.queryByText(/server-derived today/i)).not.toBeInTheDocument();
+    expect(document.querySelector('.code-window pre')?.textContent).toContain('"source": "server"');
+    expect(document.querySelector('.code-window pre')?.textContent).not.toContain('"source": "browser"');
     expect(screen.getByRole('heading', { name: /time as one comparable number/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /where a shared reference helps/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /whole public api/i })).toBeInTheDocument();
