@@ -6,6 +6,7 @@
   --surface-high: #151f36;
   --line: #26324c;
   --line-bright: #3a4868;
+  --control-border: #5f7198;
   --amber: #f6b73c;
   --amber-light: #ffd477;
   --star: #f1f4fb;
@@ -63,7 +64,7 @@ h1 { margin-bottom: 24px; max-width: 850px; font-size: clamp(44px, 7vw, 78px); l
 .clock-meta { display: flex; flex-wrap: wrap; gap: 10px 26px; color: var(--blue); font: 13px/1.6 var(--mono); }
 .clock-status { min-height: 24px; margin: 13px 0 24px; color: var(--muted); font: 12px/1.6 var(--mono); }
 .hero-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
-.button { display: inline-flex; min-height: 46px; align-items: center; justify-content: center; padding: 0 18px; border: 1px solid var(--line-bright); border-radius: 4px; text-decoration: none; cursor: pointer; transition: transform .15s ease, border-color .15s ease, background .15s ease; }
+.button { display: inline-flex; min-height: 46px; align-items: center; justify-content: center; padding: 0 18px; border: 1px solid var(--control-border); border-radius: 4px; text-decoration: none; cursor: pointer; transition: transform .15s ease, border-color .15s ease, background .15s ease; }
 .button:hover:not(:disabled) { transform: translateY(-2px); }
 .button:disabled { cursor: wait; opacity: .65; }
 .button.primary { border-color: var(--amber); background: var(--amber); color: var(--ink); font-weight: 800; }
@@ -111,7 +112,7 @@ pre { margin: 0; white-space: pre-wrap; }
 .docs-section { display: grid; grid-template-columns: .72fr 1.28fr; gap: 46px; align-items: start; }
 .docs-copy { position: sticky; top: 110px; }
 .docs-copy p { margin: 22px 0; color: var(--muted); line-height: 1.7; }
-.copy-button { min-height: 42px; padding: 0 15px; border: 1px solid var(--line-bright); border-radius: 4px; background: var(--surface-high); color: var(--star); cursor: pointer; }
+.copy-button { min-height: 42px; padding: 0 15px; border: 1px solid var(--control-border); border-radius: 4px; background: var(--surface-high); color: var(--star); cursor: pointer; }
 .code-title { display: flex; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; }
 .code-title span { display: flex; gap: 7px; }
 .code-title i { width: 8px; height: 8px; border-radius: 50%; background: var(--line-bright); }
