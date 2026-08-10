@@ -1,5 +1,7 @@
 # Spydergoat Local Hardening Handoff — 2026-08-10
 
+> **Superseded snapshot.** This receipt predates the React v1.1 Static Assets bundle and its final test count. Preserve it as hardening history; use `v1.1-release-candidate-2026-08-10.md` for the current local candidate.
+
 ## Verdict
 
 - **Public free endpoint/runtime: PARTIAL publish-readiness.** Local tests, Worker smoke, browser checks, dependency audit, and Wrangler dry-run pass. Nothing was deployed.

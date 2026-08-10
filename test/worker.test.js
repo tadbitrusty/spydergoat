@@ -11,19 +11,56 @@ async function request(path, init = {}, bindings = env()) {
   return worker.fetch(new Request(`https://spydergoat.test${path}`, init), bindings, {});
 }
 
-test('homepage is the truthful navy amber redesign with semantic and mobile anchors', async () => {
-  const response = await request('/');
-  const html = await response.text();
+test('static website requests delegate to the Cloudflare assets binding', async () => {
+  const seen = [];
+  const bindings = {
+    ...env(),
+    ASSETS: {
+      async fetch(assetRequest) {
+        seen.push(assetRequest.url);
+        if (assetRequest.headers.has('if-none-match')) {
+          return new Response(null, { status: 304, headers: { ETag: '"stale-asset-tag"' } });
+        }
+        return new Response('<!doctype html><script type="application/json" id="spydergoat-bootstrap">__SPYDERGOAT_BOOTSTRAP__</script><main>React v1.1</main>', {
+          headers: {
+            'Content-Type': 'text/html; charset=utf-8',
+            'Content-Length': '999',
+            ETag: '"stale-asset-tag"',
+          },
+        });
+      },
+    },
+  };
+  const response = await request('/', { headers: { 'If-None-Match': '"stale-asset-tag"' } }, bindings);
   assert.equal(response.status, 200);
-  assert.match(html, /<main/);
-  assert.match(html, /--amber:#F5B23F/i);
-  assert.match(html, /id="why"/);
-  assert.match(html, /id="cases"/);
-  assert.match(html, /id="docs"/);
-  assert.match(html, /id="pricing"/);
-  assert.match(html, /@media\s*\(max-width:600px\)/);
-  assert.doesNotMatch(html, /buy\.stripe\.com|Get API key|\[UPTIME\]|verify & fill|FedEx/i);
-  assert.match(html, /Paid access is paused/i);
+  assert.deepEqual(seen, ['https://spydergoat.test/']);
+  const html = await response.text();
+  assert.match(html, /React v1\.1/);
+  assert.doesNotMatch(html, /__SPYDERGOAT_BOOTSTRAP__/);
+  assert.match(html, /"source":"server"/);
+  const csp = response.headers.get('content-security-policy') || '';
+  assert.match(csp, /frame-ancestors 'none'/);
+  assert.match(csp, /script-src 'self'/);
+  assert.match(csp, /style-src 'self'/);
+  assert.doesNotMatch(csp, /unsafe-inline/);
+  assert.equal(response.headers.get('content-length'), null);
+  assert.equal(response.headers.get('etag'), null);
+});
+
+test('static shell fails closed when the server bootstrap marker is missing', async () => {
+  const bindings = {
+    ...env(),
+    ASSETS: {
+      async fetch() {
+        return new Response('<!doctype html><main>Broken shell</main>', {
+          headers: { 'Content-Type': 'text/html; charset=utf-8' },
+        });
+      },
+    },
+  };
+  const response = await request('/', {}, bindings);
+  assert.equal(response.status, 503);
+  assert.match(await response.text(), /temporarily unavailable/i);
 });
 
 test('homepage offers one intentional API calibration and interpolates locally without polling', async () => {
@@ -86,6 +123,15 @@ test('HEAD, sitemap, robots and route-specific methods are supported', async () 
   const post = await request('/mjd', { method: 'POST' });
   assert.equal(post.status, 405);
   assert.equal(post.headers.get('allow'), 'GET, HEAD, OPTIONS');
+});
+
+test('HEAD on a public API is quota-neutral', async () => {
+  const bindings = env();
+  const head = await request('/mjd', { method: 'HEAD' }, bindings);
+  const get = await request('/mjd', {}, bindings);
+  assert.equal(head.status, 200);
+  assert.equal(await head.text(), '');
+  assert.equal(get.status, 200);
 });
 
 test('public API keeps CORS and returns documented response', async () => {

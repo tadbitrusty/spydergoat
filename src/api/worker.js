@@ -8,7 +8,11 @@ const SECURITY = {
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'no-referrer',
   'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=()',
-  'Content-Security-Policy': "default-src 'self'; img-src 'self' data: https://pub-972f1410bb404f91bce6fb7c715b72e4.r2.dev; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+  'Content-Security-Policy': "default-src 'self'; img-src 'self' data: https://pub-972f1410bb404f91bce6fb7c715b72e4.r2.dev; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+};
+const ASSET_SECURITY = {
+  ...SECURITY,
+  'Content-Security-Policy': "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
 };
 
 export function getMJD(unixMs) { return unixMs / 86_400_000 + 40_587; }
@@ -51,6 +55,43 @@ function sensitiveUnavailable() {
     status: 503,
     headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store, private', Pragma: 'no-cache', ...SECURITY },
   });
+}
+
+function staticShellUnavailable() {
+  return new Response('<!doctype html><html lang="en"><meta charset="utf-8"><meta name="robots" content="noindex"><title>SpyderGoat temporarily unavailable</title><body><main><h1>SpyderGoat is temporarily unavailable</h1><p>The static application shell could not be verified. The time API remains available at <a href="/mjd">/mjd</a>.</p></main></body></html>', {
+    status: 503,
+    headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', ...ASSET_SECURITY },
+  });
+}
+
+async function assetHomepage(request, env) {
+  const requestHeaders = new Headers(request.headers);
+  for (const name of ['If-None-Match', 'If-Modified-Since', 'If-Match', 'If-Unmodified-Since', 'If-Range', 'Range']) {
+    requestHeaders.delete(name);
+  }
+  const assetRequest = new Request(request.url, { method: 'GET', headers: requestHeaders });
+  const asset = await env.ASSETS.fetch(assetRequest);
+  const headers = new Headers(asset.headers);
+  for (const name of ['Content-Length', 'Content-Encoding', 'Content-Range', 'ETag', 'Last-Modified', 'Accept-Ranges', 'CF-Cache-Status']) {
+    headers.delete(name);
+  }
+  headers.set('Cache-Control', 'no-store');
+  for (const [name, value] of Object.entries(ASSET_SECURITY)) headers.set(name, value);
+
+  if (asset.status >= 300 && asset.status < 400) {
+    return new Response(null, { status: asset.status, headers });
+  }
+  if (asset.status !== 200 || !headers.get('Content-Type')?.toLowerCase().includes('text/html')) {
+    return staticShellUnavailable();
+  }
+
+  const html = await asset.text();
+  const marker = '__SPYDERGOAT_BOOTSTRAP__';
+  if (html.split(marker).length !== 2) return staticShellUnavailable();
+  if (request.method === 'HEAD') return new Response(null, { status: 200, headers });
+
+  const bootstrap = JSON.stringify(buildTimeResponse(Date.now())).replaceAll('<', '\\u003c');
+  return new Response(html.replace(marker, bootstrap), { status: 200, headers });
 }
 
 function homepage(now) {
@@ -110,15 +151,17 @@ async function handle(request, env) {
   if (!['GET', 'HEAD'].includes(method)) {
     return json({ error: 'method_not_allowed' }, 405, { Allow: isApi ? 'GET, HEAD, OPTIONS' : 'GET, HEAD' });
   }
+  if ((path === '/' || path === '/index.html') && env.ASSETS) return assetHomepage(request, env);
   if (path === '/' || path === '/index.html') return htmlResponse(homepage(Date.now()), method);
   if (path === '/success') return sensitiveUnavailable();
   if (path === '/robots.txt') return new Response(method === 'HEAD' ? null : 'User-agent: *\nAllow: /\nSitemap: https://spydergoat.com/sitemap.xml\n', { headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
   if (path === '/sitemap.xml') return new Response(method === 'HEAD' ? null : '<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>https://spydergoat.com/</loc></url></urlset>', { headers: { 'Content-Type': 'application/xml; charset=utf-8' } });
   if (isApi) {
     if (request.headers.has('Authorization')) return json({ error: 'paid_access_paused' }, 503, API_CORS);
+    if (method === 'HEAD') return new Response(null, { headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...API_CORS } });
     const limit = await checkFreeRateLimit(request, env);
     if (!limit.allowed) return json({ error: 'rate_limited', message: 'Free tier: 1 request per 30 minutes', retry_after: limit.retryAfter }, 429, { 'Retry-After': String(limit.retryAfter), ...API_CORS });
-    return new Response(method === 'HEAD' ? null : JSON.stringify(buildTimeResponse(Date.now(), path === '/jd')), { headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...API_CORS } });
+    return new Response(JSON.stringify(buildTimeResponse(Date.now(), path === '/jd')), { headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...API_CORS } });
   }
   return json({ error: 'not_found', endpoints: ['/', '/mjd', '/jd'] }, 404);
 }

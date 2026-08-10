@@ -1,5 +1,7 @@
 # Spydergoat - Real-Time Atomic Modified Julian Clock
 
+> **Historical concept document — superseded for v1.1.** This January 2026 plan records the original product hypothesis, not the current runtime or release contract. SpyderGoat v1.1 uses the Cloudflare Worker clock and does **not** claim NIST/GPS synchronization, atomic-clock accuracy, signed receipts, or a measured uptime SLA. Use `README.md` and `docs/v1.1-release-candidate-2026-08-10.md` for current behavior and release posture.
+
 **Domain:** spydergoat.com (owned, Cloudflare, locked 10 years through 2036)
 **Tagline:** "One number. Always right. Solve temporal drift."
 

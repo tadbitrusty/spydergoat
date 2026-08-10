@@ -20,6 +20,11 @@ binding = "DB"
 database_name = "spydergoat-db"
 database_id = "7a4439ad-a213-432e-a1cd-e14065f60df2"
 
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+run_worker_first = ["/", "/index.html", "/mjd", "/jd", "/success", "/webhook", "/sitemap.xml", "/robots.txt"]
+
 [vars]
 ENVIRONMENT = "production"
 # Paid checkout is intentionally not packaged while billing is fail-closed.

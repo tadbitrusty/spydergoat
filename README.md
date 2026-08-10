@@ -97,9 +97,10 @@ JD  = MJD + 2400000.5
 
 ## Stack
 
-- Runtime: Cloudflare Workers
-- Storage: Cloudflare KV for free rate limiting
-- Database binding: Cloudflare D1 reserved for transactional account state; local migration design is not applied live
+- Frontend: React 19 + TypeScript + Vite, delivered as Cloudflare Worker Static Assets
+- Runtime: Cloudflare Workers; the HTML shell receives a fresh server-time bootstrap before React mounts
+- Storage: Cloudflare KV for best-effort free-tier abuse limiting
+- Database binding: Cloudflare D1 reserved for transactional account state; the local migration design is not applied live
 - Billing: fail-closed while Stripe catalog validation, D1 migration, and one-time key delivery await supervised setup
 - DNS/CDN: Cloudflare
 
@@ -110,11 +111,15 @@ npm install
 npm run dev
 ```
 
-Tests and syntax checks:
+`npm run dev` builds the initial asset bundle, then starts Vite with HMR at `http://localhost:5173` and the local Worker API at `http://localhost:8787`. Vite proxies `/mjd`, `/jd`, `/success`, and `/webhook` to the Worker.
+
+Useful commands:
 
 ```bash
-npm test
-npm run check
+npm test          # Node Worker/billing tests + Vitest React tests
+npm run check     # TypeScript + Worker/billing syntax checks
+npm run build     # Production Vite bundle
+npm run dev:worker
 ```
 
 Deploy only when explicitly authorized:
