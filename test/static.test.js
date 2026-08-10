@@ -16,6 +16,11 @@ function contrastRatio(first, second) {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
+test('navigation and copy controls provide 44px touch targets', () => {
+  assert.match(css, /\.nav-links a\s*\{[^}]*min-height:\s*44px/s);
+  assert.match(css, /\.copy-button\s*\{[^}]*min-height:\s*44px/s);
+});
+
 test('interactive control boundaries meet 3:1 non-text contrast', () => {
   const controlBorder = css.match(/--control-border:\s*(#[0-9a-f]{6})/i)?.[1];
   const pageBackground = css.match(/--ink:\s*(#[0-9a-f]{6})/i)?.[1];

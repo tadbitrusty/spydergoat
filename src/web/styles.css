@@ -43,7 +43,7 @@ button:focus-visible, a:focus-visible { outline: 3px solid var(--amber); outline
 .brand b { padding: 3px 7px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font: 10px var(--mono); letter-spacing: .06em; }
 .brand-mark { width: 27px; height: 27px; fill: none; stroke: var(--amber); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
 .nav-links { display: flex; align-items: center; gap: 28px; }
-.nav-links a { color: var(--muted); text-decoration: none; font-size: 14px; }
+.nav-links a { display: inline-flex; min-height: 44px; align-items: center; color: var(--muted); text-decoration: none; font-size: 14px; }
 .nav-links a:hover { color: var(--amber); }
 
 .hero { position: relative; padding-block: 88px 78px; }
@@ -112,7 +112,7 @@ pre { margin: 0; white-space: pre-wrap; }
 .docs-section { display: grid; grid-template-columns: .72fr 1.28fr; gap: 46px; align-items: start; }
 .docs-copy { position: sticky; top: 110px; }
 .docs-copy p { margin: 22px 0; color: var(--muted); line-height: 1.7; }
-.copy-button { min-height: 42px; padding: 0 15px; border: 1px solid var(--control-border); border-radius: 4px; background: var(--surface-high); color: var(--star); cursor: pointer; }
+.copy-button { min-height: 44px; padding: 0 15px; border: 1px solid var(--control-border); border-radius: 4px; background: var(--surface-high); color: var(--star); cursor: pointer; }
 .code-title { display: flex; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; }
 .code-title span { display: flex; gap: 7px; }
 .code-title i { width: 8px; height: 8px; border-radius: 50%; background: var(--line-bright); }
