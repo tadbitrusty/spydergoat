@@ -133,11 +133,14 @@ function useTimeReceipt() {
 
 function BrandMark() {
   return (
-    <svg className="brand-mark" viewBox="0 0 64 64" aria-hidden="true">
-      <path d="M9 13c9 0 12 10 23 10S46 13 55 13c-2 13-10 19-23 19S11 26 9 13Z" />
-      <path d="M20 34h24l-5 19H25Z" />
-      <path d="M25 42h14M28 48h8" />
-    </svg>
+    <img
+      className="brand-mark"
+      src="/spydergoat-original.png"
+      alt=""
+      width="40"
+      height="40"
+      aria-hidden="true"
+    />
   );
 }
 

@@ -24,6 +24,10 @@ describe('SpyderGoat v1.1', () => {
 
     render(<App />);
 
+    const brandLogo = screen.getByRole('link', { name: /spydergoat home/i }).querySelector('img');
+    expect(brandLogo).toHaveAttribute('src', '/spydergoat-original.png');
+    expect(brandLogo).toHaveAttribute('width', '40');
+    expect(brandLogo).toHaveAttribute('height', '40');
     expect(screen.getByRole('heading', { level: 1, name: /external time reference/i })).toBeInTheDocument();
     expect(screen.getAllByText(/browser preview/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/browser-derived preview/i)).toBeInTheDocument();
