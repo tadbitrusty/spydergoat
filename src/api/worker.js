@@ -1,856 +1,126 @@
-/**
- * Spydergoat - Real-Time MJD Clock
- *
- * Billing tiers:
- * - Free: 1 call per 30 min (IP-based)
- * - Paid ($4.89/mo): Unlimited up to 5000 calls
- * - Over 5k: $0.001/call from wallet
- * - Wallet empty: Reverts to free tier
- */
+const RATE_LIMIT_MS = 1_800_000;
+const API_CORS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+};
+const SECURITY = {
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'no-referrer',
+  'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=()',
+  'Content-Security-Policy': "default-src 'self'; img-src 'self' data: https://pub-972f1410bb404f91bce6fb7c715b72e4.r2.dev; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+};
 
-const RATE_LIMIT_MS = 1800000; // 30 minutes
+export function getMJD(unixMs) { return unixMs / 86_400_000 + 40_587; }
+export function getJD(mjd) { return mjd + 2_400_000.5; }
 
-/**
- * Calculate Modified Julian Date from Unix milliseconds
- * MJD = (unix_ms / 86400000) + 40587
- */
-function getMJD(unixMs) {
-  return (unixMs / 86400000) + 40587;
+export function buildTimeResponse(now, includeJD = false) {
+  const mjd = getMJD(now);
+  const value = {
+    mjd: Number(mjd.toFixed(8)),
+    utc: new Date(now).toISOString(),
+    unix: Math.floor(now / 1000),
+    source: 'server',
+  };
+  if (includeJD) value.jd = Number(getJD(mjd).toFixed(8));
+  return value;
 }
 
-/**
- * Calculate Julian Date from MJD
- * JD = MJD + 2400000.5
- */
-function getJD(mjd) {
-  return mjd + 2400000.5;
+function clientIP(request) {
+  return request.headers.get('CF-Connecting-IP') || 'unknown';
 }
 
-/**
- * Get client IP from request
- */
-function getClientIP(request) {
-  return request.headers.get('CF-Connecting-IP') ||
-         request.headers.get('X-Forwarded-For')?.split(',')[0]?.trim() ||
-         'unknown';
-}
-
-/**
- * Check rate limit for free tier (IP-based)
- * Returns: { allowed: boolean, retryAfter: number (seconds) }
- */
-async function checkFreeRateLimit(ip, env) {
-  if (!env.SPYDERGOAT_KV) {
-    // KV not configured - allow (dev mode)
-    return { allowed: true, retryAfter: 0 };
-  }
-
-  const key = `rate:free:${ip}`;
+async function checkFreeRateLimit(request, env) {
+  if (!env.SPYDERGOAT_KV) return { allowed: true, retryAfter: 0 };
+  const key = `rate:free:${clientIP(request)}`;
   const now = Date.now();
-
-  const lastCall = await env.SPYDERGOAT_KV.get(key);
-
-  if (lastCall) {
-    const elapsed = now - parseInt(lastCall, 10);
-    if (elapsed < RATE_LIMIT_MS) {
-      const retryAfter = Math.ceil((RATE_LIMIT_MS - elapsed) / 1000);
-      return { allowed: false, retryAfter };
-    }
+  const previous = Number(await env.SPYDERGOAT_KV.get(key));
+  if (Number.isFinite(previous) && now - previous < RATE_LIMIT_MS) {
+    return { allowed: false, retryAfter: Math.ceil((RATE_LIMIT_MS - (now - previous)) / 1000) };
   }
-
-  // Record this call
-  await env.SPYDERGOAT_KV.put(key, now.toString(), { expirationTtl: 1800 });
-
+  await env.SPYDERGOAT_KV.put(key, String(now), { expirationTtl: 1800 });
   return { allowed: true, retryAfter: 0 };
 }
 
-/**
- * Check rate limit for paid tier (API key based)
- * Billing logic:
- * - Active subscription: 5000 calls/month included
- * - Over 5000: deduct from wallet at $0.001/call
- * - Wallet empty: fall back to free tier (1/30min)
- */
-async function checkPaidRateLimit(apiKey, ip, env) {
-  if (!env.SPYDERGOAT_KV) {
-    return { allowed: true, tier: 'paid' };
-  }
-
-  // Look up user by API key
-  const customerId = await env.SPYDERGOAT_KV.get(`apikey:${apiKey}`);
-  if (!customerId) {
-    // Invalid API key - fall back to free tier
-    return { allowed: false, invalid_key: true };
-  }
-
-  const userDataRaw = await env.SPYDERGOAT_KV.get(`user:${customerId}`);
-  if (!userDataRaw) {
-    return { allowed: false, invalid_key: true };
-  }
-
-  const userData = JSON.parse(userDataRaw);
-
-  // Admin bypass - unlimited access
-  if (userData.admin === true) {
-    return { allowed: true, tier: 'admin' };
-  }
-
-  // Check subscription status
-  if (userData.subscription_status !== 'active') {
-    // Canceled/inactive - fall back to free tier
-    return { allowed: false, inactive_subscription: true };
-  }
-
-  // Check if within 5000 included calls
-  if (userData.current_period_calls < 5000) {
-    // Increment call count
-    userData.current_period_calls += 1;
-    await env.SPYDERGOAT_KV.put(`user:${customerId}`, JSON.stringify(userData));
-    return {
-      allowed: true,
-      tier: 'paid',
-      calls_used: userData.current_period_calls,
-      calls_remaining: 5000 - userData.current_period_calls
-    };
-  }
-
-  // Over 5000 - check wallet
-  if (userData.wallet_balance > 0) {
-    // Deduct from wallet
-    userData.wallet_balance -= 1;
-    userData.current_period_calls += 1;
-    await env.SPYDERGOAT_KV.put(`user:${customerId}`, JSON.stringify(userData));
-    return {
-      allowed: true,
-      tier: 'wallet',
-      wallet_balance: userData.wallet_balance
-    };
-  }
-
-  // Wallet empty - fall back to free tier rate limit
-  return { allowed: false, wallet_empty: true };
+function json(value, status = 200, headers = {}) {
+  return new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...headers } });
 }
 
-/**
- * Main rate limit check - routes to free or paid
- */
-async function checkRateLimit(request, env) {
-  const authHeader = request.headers.get('Authorization');
-  const ip = getClientIP(request);
-
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    const apiKey = authHeader.slice(7);
-    const paidResult = await checkPaidRateLimit(apiKey, ip, env);
-
-    if (paidResult.allowed) {
-      return paidResult;
-    }
-
-    // Invalid key, inactive subscription, or wallet empty - fall back to free tier
-    if (paidResult.invalid_key || paidResult.inactive_subscription || paidResult.wallet_empty) {
-      return await checkFreeRateLimit(ip, env);
-    }
-
-    return paidResult;
-  }
-
-  // No API key - free tier by IP
-  return await checkFreeRateLimit(ip, env);
+function sensitiveUnavailable() {
+  return new Response('<!doctype html><html lang="en"><meta charset="utf-8"><meta name="robots" content="noindex,nofollow"><title>Paid access paused</title><body><main><h1>Paid access is paused</h1><p>Account and key delivery are unavailable while transactional billing is being hardened.</p><p><a href="/">Back to Spydergoat</a></p></main></body></html>', {
+    status: 503,
+    headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store, private', Pragma: 'no-cache', ...SECURITY },
+  });
 }
 
-/**
- * Build time response object
- */
-function buildTimeResponse(now, includeJD = false) {
-  const mjd = getMJD(now);
-
-  const response = {
-    mjd: parseFloat(mjd.toFixed(8)),
-    utc: new Date(now).toISOString(),
-    unix: Math.floor(now / 1000),
-    source: 'server'
-  };
-
-  if (includeJD) {
-    response.jd = parseFloat(getJD(mjd).toFixed(8));
-  }
-
-  return response;
-}
-
-/**
- * Generate HTML page
- */
-function generateHTML(mjd, utc, env) {
-  const checkoutUrl = env.STRIPE_CHECKOUT_URL || '#';
+function homepage(now) {
+  const initial = buildTimeResponse(now);
   return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Spydergoat - MJD Clock</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      min-height: 100vh;
-      font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', monospace;
-      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
-      color: #e8e8e8;
-    }
-    .container { max-width: 800px; margin: 0 auto; padding: 2rem; }
-    .hero { display: flex; align-items: center; justify-content: center; gap: 3rem; padding: 4rem 2rem; flex-wrap: wrap; }
-    .hero-goat { width: 250px; height: auto; flex-shrink: 0; }
-    .hero-content { text-align: center; }
-    h1 { font-size: 2.5rem; font-weight: 300; margin-bottom: 0.5rem; color: #00d9ff; }
-    h2 { font-size: 1.5rem; font-weight: 300; margin-bottom: 1rem; color: #00d9ff; }
-    .tagline { font-size: 1rem; color: #888; margin-bottom: 2rem; }
-    .ticker-box {
-      background: rgba(0, 217, 255, 0.1);
-      border: 2px solid #00d9ff;
-      border-radius: 12px;
-      padding: 2rem 3rem;
-      margin: 2rem auto;
-      display: inline-block;
-    }
-    .mjd-label { font-size: 0.875rem; color: #888; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 0.5rem; }
-    .mjd-value { font-size: 3rem; font-weight: 700; color: #00d9ff; font-variant-numeric: tabular-nums; }
-    .utc-time { font-size: 1rem; color: #666; margin-top: 1rem; }
-
-    .section { padding: 3rem 2rem; border-top: 1px solid rgba(255,255,255,0.1); }
-    .section-title { text-align: center; margin-bottom: 2rem; }
-
-    .pricing { display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; }
-    .price-card {
-      background: rgba(255,255,255,0.05);
-      border: 1px solid rgba(255,255,255,0.1);
-      border-radius: 12px;
-      padding: 2rem;
-      width: 220px;
-      text-align: center;
-    }
-    .price-card.featured { border-color: #00d9ff; }
-    .price-name { font-size: 1.25rem; margin-bottom: 0.5rem; }
-    .price-amount { font-size: 2rem; color: #00d9ff; margin-bottom: 0.5rem; }
-    .price-period { font-size: 0.875rem; color: #666; margin-bottom: 1rem; }
-    .price-feature { font-size: 0.875rem; color: #888; margin-bottom: 0.5rem; }
-
-    .btn {
-      display: inline-block;
-      background: #00d9ff;
-      color: #1a1a2e;
-      padding: 0.75rem 2rem;
-      border-radius: 8px;
-      text-decoration: none;
-      font-weight: 600;
-      margin-top: 1rem;
-      transition: opacity 0.2s;
-    }
-    .btn:hover { opacity: 0.9; }
-    .btn-small { padding: 0.5rem 1.5rem; font-size: 0.875rem; }
-
-    .code-block {
-      background: rgba(0,0,0,0.3);
-      border-radius: 8px;
-      padding: 1.5rem;
-      overflow-x: auto;
-      text-align: left;
-      margin: 1rem 0;
-    }
-    .code-block code { color: #00d9ff; }
-    .code-comment { color: #666; }
-
-    .footer { text-align: center; padding: 2rem; color: #666; font-size: 0.875rem; }
-
-    .how-it-works { max-width: 500px; margin: 0 auto; }
-    .step { display: flex; gap: 1rem; margin-bottom: 1.5rem; align-items: flex-start; }
-    .step-num {
-      background: #00d9ff;
-      color: #1a1a2e;
-      width: 28px;
-      height: 28px;
-      border-radius: 50%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-weight: 700;
-      flex-shrink: 0;
-    }
-    .step-content { flex: 1; }
-    .step-content strong { color: #00d9ff; }
-    .step-content p { color: #888; margin-top: 0.25rem; font-size: 0.875rem; }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <div class="hero">
-      <img src="https://pub-972f1410bb404f91bce6fb7c715b72e4.r2.dev/assets/spydergoat.png" alt="Spydergoat" class="hero-goat">
-      <div class="hero-content">
-        <h1>Spydergoat</h1>
-        <p class="tagline">Accurate time for anything.<br>One API call.</p>
-        <div class="ticker-box">
-          <div class="mjd-label">Modified Julian Date</div>
-          <div class="mjd-value" id="mjd">${mjd.toFixed(8)}</div>
-          <div class="utc-time" id="utc">${utc}</div>
-        </div>
-      </div>
-    </div>
-
-    <div class="section">
-      <div class="section-title"><h2>How It Works</h2></div>
-      <div class="how-it-works">
-        <div class="step">
-          <div class="step-num">1</div>
-          <div class="step-content">
-            <strong>Free</strong>
-            <p>No signup. Hit /mjd directly. 1 request per 30 minutes.</p>
-          </div>
-        </div>
-        <div class="step">
-          <div class="step-num">2</div>
-          <div class="step-content">
-            <strong>Pro ($4.89/mo)</strong>
-            <p>Get an API key. 5,000 requests/month. No rate limit.</p>
-          </div>
-        </div>
-        <div class="step">
-          <div class="step-num">3</div>
-          <div class="step-content">
-            <strong>Over 5,000?</strong>
-            <p>Pulls from your wallet at $0.001/request. Wallet empty? Back to free tier.</p>
-          </div>
-        </div>
-        <div class="step">
-          <div class="step-num">4</div>
-          <div class="step-content">
-            <strong>Wallet</strong>
-            <p>Prepaid credits. Never expires. Top up anytime.</p>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div class="section">
-      <div class="section-title"><h2>Pricing</h2></div>
-      <div class="pricing">
-        <div class="price-card">
-          <div class="price-name">Free</div>
-          <div class="price-amount">$0</div>
-          <div class="price-period">forever</div>
-          <div class="price-feature">1 request / 30 min</div>
-          <div class="price-feature">No API key needed</div>
-        </div>
-        <div class="price-card featured">
-          <div class="price-name">Pro</div>
-          <div class="price-amount">$4.89</div>
-          <div class="price-period">/ month</div>
-          <div class="price-feature">5,000 requests included</div>
-          <div class="price-feature">No rate limit</div>
-          <a href="${checkoutUrl}" class="btn">Get API Key</a>
-        </div>
-      </div>
-    </div>
-
-    <div class="section">
-      <div class="section-title"><h2>Wallet Top-Up</h2></div>
-      <p style="text-align: center; color: #888; margin-bottom: 1.5rem;">Need more than 5,000/month? Add credits at $0.001 per request.</p>
-      <div class="pricing">
-        <div class="price-card">
-          <div class="price-name">1K</div>
-          <div class="price-amount">$1</div>
-          <div class="price-feature">1,000 requests</div>
-          <a href="https://buy.stripe.com/7sY5kEfewg4ogSJ5uD7Re05" class="btn btn-small">Buy</a>
-        </div>
-        <div class="price-card">
-          <div class="price-name">10K</div>
-          <div class="price-amount">$10</div>
-          <div class="price-feature">10,000 requests</div>
-          <a href="https://buy.stripe.com/dRmeVeaYgg4o45X8GP7Re04" class="btn btn-small">Buy</a>
-        </div>
-        <div class="price-card">
-          <div class="price-name">100K</div>
-          <div class="price-amount">$100</div>
-          <div class="price-feature">100,000 requests</div>
-          <a href="https://buy.stripe.com/00w28saYgf0k7i93mv7Re03" class="btn btn-small">Buy</a>
-        </div>
-      </div>
-      <p style="text-align: center; color: #666; margin-top: 1.5rem; font-size: 0.875rem;">Need more? <a href="mailto:contact@spydergoat.com" style="color: #00d9ff;">contact@spydergoat.com</a> for volume pricing.</p>
-    </div>
-
-    <div class="section">
-      <div class="section-title"><h2>API</h2></div>
-      <div class="code-block">
-        <code><span class="code-comment"># Get current MJD</span>
-curl https://spydergoat.com/mjd
-
-<span class="code-comment"># With API key (no rate limit)</span>
-curl -H "Authorization: Bearer sg_your_key" https://spydergoat.com/mjd</code>
-      </div>
-    </div>
-
-    <div class="footer">
-      Accurate time for everything.
-    </div>
-  </div>
-  <script>
-    function update() {
-      const mjd = (Date.now() / 86400000) + 40587;
-      document.getElementById('mjd').textContent = mjd.toFixed(8);
-      document.getElementById('utc').textContent = new Date().toISOString();
-    }
-    setInterval(update, 100);
-  </script>
-</body>
-</html>`;
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Spydergoat — Modified Julian Date (MJD) API</title>
+<meta name="description" content="Get server-derived Modified Julian Date, UTC, and Unix time over HTTP. A compact external time reference for software.">
+<link rel="canonical" href="https://spydergoat.com/"><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%230A0F1E'/%3E%3Ctext x='12' y='46' font-size='40' fill='%23F5B23F'%3ES%3C/text%3E%3C/svg%3E"><meta name="theme-color" content="#0A0F1E">
+<meta property="og:title" content="Spydergoat — MJD Time API"><meta property="og:description" content="Server-derived MJD, UTC, and Unix time over HTTP."><meta property="og:url" content="https://spydergoat.com/"><meta property="og:type" content="website">
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"WebAPI","name":"Spydergoat MJD API","url":"https://spydergoat.com/mjd","documentation":"https://spydergoat.com/#docs"}</script>
+<style>
+:root{--ink:#0A0F1E;--surface:#121A31;--surface2:#0E1527;--line:#25304E;--amber:#F5B23F;--star:#E9EDF8;--muted:#9DA7C2;--mono:ui-monospace,SFMono-Regular,Consolas,monospace;--sans:system-ui,-apple-system,sans-serif}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--ink);color:var(--star);font:16px/1.6 var(--sans)}a{color:var(--amber)}a:focus-visible{outline:3px solid var(--amber);outline-offset:3px}.skip{position:absolute;left:-999px}.skip:focus{left:12px;top:12px;background:var(--ink);padding:10px;z-index:20}.wrap{max-width:1080px;margin:auto;padding:0 24px}nav{position:sticky;top:0;z-index:10;background:#0a0f1ef2;border-bottom:1px solid var(--line)}.nav{min-height:60px;display:flex;align-items:center;gap:20px}.brand{color:var(--star);font-weight:700;text-decoration:none}.links{margin-left:auto;display:flex;gap:18px;flex-wrap:wrap}.links a{color:var(--muted);padding:12px 0}header{padding:70px 0 44px}.eyebrow,.kicker{font:12px var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--amber)}h1{max-width:760px;font-size:clamp(30px,5vw,50px);line-height:1.12}.lede,.sub{max-width:680px;color:var(--muted)}.clock{margin:42px 0;font-family:var(--mono)}.mjd{font-size:clamp(36px,8vw,82px);font-weight:700;color:var(--amber);overflow-wrap:anywhere}.utc,.status{color:var(--muted);font-size:14px}.actions{display:flex;gap:12px;flex-wrap:wrap}.btn{padding:12px 18px;border:1px solid var(--line);border-radius:6px;text-decoration:none}.primary{background:var(--amber);color:var(--ink);font-weight:700}.ruler{margin-top:50px;padding:24px 0;border-block:1px solid var(--line);overflow:auto}.track{min-width:650px;display:grid;grid-template-columns:repeat(4,1fr);gap:16px}.tick{border-top:2px solid var(--line);padding-top:12px;color:var(--muted);font:12px var(--mono)}.tick strong{display:block;color:var(--star)}.tick.now{border-color:var(--amber)}.tick.now strong{color:var(--amber)}section{padding:68px 0;scroll-margin-top:70px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:1px;background:var(--line);border:1px solid var(--line)}.card{background:var(--surface2);padding:24px}.card p{color:var(--muted)}.cases article{display:grid;grid-template-columns:1fr 1.2fr;gap:28px;padding:28px 0;border-top:1px solid var(--line)}pre{margin:0;background:var(--surface2);border:1px solid var(--line);padding:18px;overflow:auto;color:var(--star)}.trust,.pricing{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:18px}.panel{padding:25px;background:var(--surface);border:1px solid var(--line);border-radius:8px}.panel b{display:block;color:var(--amber);font:600 22px var(--mono)}.paused{border-color:var(--amber)}.badge{display:inline-block;padding:7px 10px;border:1px solid var(--amber);color:var(--amber);font:13px var(--mono)}footer{padding:36px 0;border-top:1px solid var(--line);color:var(--muted)}
+@media(max-width:760px){.cases article{grid-template-columns:1fr}.nav{align-items:flex-start;padding-block:10px}.links{gap:10px}.links a{min-height:44px}.actions .btn{flex:1;text-align:center}}
+@media (max-width:600px){.wrap{padding-inline:18px}.nav{display:block}.links{margin:4px 0 0}.links a{font-size:13px}.track{min-width:0;grid-template-columns:1fr 1fr}.mjd{font-size:clamp(32px,12vw,52px)}}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+</style></head><body><a class="skip" href="#content">Skip to content</a>
+<nav aria-label="Primary"><div class="wrap nav"><a class="brand" href="#top">spydergoat</a><div class="links"><a href="#why">Why MJD</a><a href="#cases">Use cases</a><a href="#docs">Docs</a><a href="#pricing">Pricing</a></div></div></nav>
+<main id="content"><header id="top"><div class="wrap"><div class="eyebrow">Modified Julian Date · Time API</div><h1>A compact external time reference for software.</h1><p class="lede">Spydergoat returns server-derived MJD, UTC, and Unix time in one small JSON response. Use it to normalize and correlate event timestamps across systems.</p>
+<div class="clock"><div>Current MJD</div><div class="mjd" id="mjd">${initial.mjd.toFixed(8)}</div><time class="utc" id="utc" datetime="${initial.utc}">${initial.utc}</time><div class="status" id="clock-status">Server-rendered value advanced locally.</div></div>
+<div class="actions"><a class="btn primary" href="/mjd">Try the free endpoint</a><button class="btn" id="calibrate" type="button">Calibrate display from /mjd</button><a class="btn" href="#docs">Read the response</a></div>
+<figure class="ruler" aria-label="Time epoch ruler"><div class="track"><div class="tick"><strong>JD 0</strong>4713 BCE · Julian calendar</div><div class="tick"><strong>MJD 0</strong>17 Nov 1858</div><div class="tick"><strong>MJD 40587</strong>Unix epoch · 1970</div><div class="tick now"><strong id="ruler-now">MJD ${Math.floor(initial.mjd)}</strong>server-derived today</div></div><figcaption class="status">MJD = JD − 2,400,000.5. The fractional part represents time of day on the stated scale.</figcaption></figure></div></header>
+<section id="why"><div class="wrap"><div class="kicker">Why MJD</div><h2>Time as one comparable number</h2><p class="sub">MJD can reduce timezone and calendar-conversion work when systems share the same stated time convention.</p><div class="grid"><article class="card"><h3>Timezone-independent</h3><p>A numeric UTC-derived representation without a local timezone offset.</p></article><article class="card"><h3>Simple arithmetic</h3><p>Subtract values to compare nominal elapsed days; leap-second-sensitive work still needs an explicit time scale.</p></article><article class="card"><h3>Sortable</h3><p>Useful for numeric comparisons, range queries, and cross-system event correlation.</p></article><article class="card"><h3>Documented precision</h3><p>Eight decimal places are returned from a millisecond-resolution server clock; digits are not an accuracy guarantee.</p></article></div></div></section>
+<section id="cases" class="cases"><div class="wrap"><div class="kicker">Use cases</div><h2>Where a shared reference helps</h2><article><div><h3>Agent and audit receipts</h3><p class="sub">Record when a tool run, approval, or state transition occurred using a small external response.</p></div><pre>{ "mjd": ${initial.mjd.toFixed(8)},
+  "source": "server" }</pre></article><article><div><h3>Cross-system correlation</h3><p class="sub">Normalize application events to a common numeric representation before sorting or querying.</p></div><pre>ORDER BY event_mjd ASC</pre></article><article><div><h3>Science integrations</h3><p class="sub">Exchange MJD/JD values with astronomy and mission-oriented tooling while documenting the time scale.</p></div><pre>MJD = unix_ms / 86400000 + 40587</pre></article></div></section>
+<section id="trust"><div class="wrap"><div class="kicker">Runtime facts</div><h2>Small and inspectable</h2><div class="trust"><div class="panel"><b>/mjd</b><span>Public JSON endpoint</span></div><div class="panel"><b>/jd</b><span>Includes Julian Date</span></div><div class="panel"><b>no-store</b><span>Time responses are not cached</span></div><div class="panel"><b>server</b><span>Source marker in every response</span></div></div></div></section>
+<section id="docs"><div class="wrap"><div class="kicker">Docs</div><h2>The whole public API fits here</h2><p><code>GET https://spydergoat.com/mjd</code></p><pre>{
+  "mjd": ${initial.mjd.toFixed(8)},
+  "utc": "${initial.utc}",
+  "unix": ${initial.unix},
+  "source": "server"
+}</pre><p class="sub">The free endpoint currently allows one request per IP every 30 minutes. <code>/jd</code> returns the same fields plus <code>jd</code>.</p></div></section>
+<section id="pricing"><div class="wrap"><div class="kicker">Access</div><h2>Free endpoint available; paid access paused</h2><div class="pricing"><div class="panel"><h3>Free</h3><b>$0</b><p>One request per IP every 30 minutes. No signup.</p><a href="/mjd">Use /mjd</a></div><div class="panel paused"><h3>Pro · $4.89/month</h3><span class="badge">Not currently available</span><p>Paid access is paused while transactional accounting, replay protection, and key delivery are hardened.</p></div><div class="panel paused"><h3>Wallet · $0.001/request</h3><span class="badge">Top-ups disabled</span><p>No payment link is exposed until account binding and ledger behavior pass supervised rehearsal.</p></div></div></div></section></main>
+<footer><div class="wrap">Spydergoat · server-derived MJD, UTC, and Unix time over HTTP.</div></footer>
+<script>(function(){var mjdNode=document.getElementById('mjd'),utcNode=document.getElementById('utc'),status=document.getElementById('clock-status'),ruler=document.getElementById('ruler-now'),calibrate=document.getElementById('calibrate');var baseMjd=${initial.mjd},basePerf=performance.now(),baseUtc=Date.parse('${initial.utc}');function draw(){var elapsed=performance.now()-basePerf;var value=baseMjd+elapsed/86400000;mjdNode.textContent=value.toFixed(8);var date=new Date(baseUtc+elapsed);utcNode.textContent=date.toISOString();utcNode.dateTime=date.toISOString();ruler.textContent='MJD '+Math.floor(value)}calibrate.addEventListener('click',function(){calibrate.disabled=true;status.textContent='Calibrating once from /mjd…';fetch('/mjd',{headers:{Accept:'application/json'}}).then(function(response){if(!response.ok)throw new Error('status');return response.json()}).then(function(data){if(!Number.isFinite(data.mjd)||typeof data.utc!=='string')throw new Error('shape');baseMjd=data.mjd;baseUtc=Date.parse(data.utc);basePerf=performance.now();status.textContent='Calibrated once from /mjd; display advances locally.';draw()}).catch(function(){status.textContent='Live calibration unavailable; showing the server-rendered value advanced locally.'}).finally(function(){calibrate.disabled=false})});draw();setInterval(draw,window.matchMedia('(prefers-reduced-motion: reduce)').matches?2000:1000)})();</script></body></html>`;
 }
 
-/**
- * Generate success page HTML
- */
-function generateSuccessHTML(apiKey) {
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Spydergoat - API Key</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', monospace;
-      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
-      color: #e8e8e8;
-    }
-    .card {
-      background: rgba(255,255,255,0.05);
-      border: 2px solid #00d9ff;
-      border-radius: 12px;
-      padding: 3rem;
-      max-width: 600px;
-      text-align: center;
-    }
-    h1 { font-size: 1.5rem; font-weight: 300; margin-bottom: 1rem; color: #00d9ff; }
-    .warning { color: #ff6b6b; font-size: 0.875rem; margin-bottom: 2rem; }
-    .key-box {
-      background: rgba(0,0,0,0.3);
-      border-radius: 8px;
-      padding: 1rem;
-      margin: 1rem 0;
-      word-break: break-all;
-      font-size: 1.1rem;
-      color: #00d9ff;
-      cursor: pointer;
-    }
-    .key-box:hover { background: rgba(0,0,0,0.5); }
-    .hint { color: #888; font-size: 0.875rem; margin-top: 1rem; }
-    .copied { color: #4ade80; }
-    .example {
-      background: rgba(0,0,0,0.3);
-      border-radius: 8px;
-      padding: 1rem;
-      margin-top: 2rem;
-      text-align: left;
-      font-size: 0.875rem;
-    }
-    .example code { color: #00d9ff; }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <h1>Your API Key</h1>
-    <p class="warning">Copy this now. We won't show it again.</p>
-    <div class="key-box" onclick="copyKey()" id="keyBox">${apiKey}</div>
-    <p class="hint" id="hint">Click to copy</p>
-    <div class="example">
-      <code>curl -H "Authorization: Bearer ${apiKey}" \\
-  https://spydergoat.com/mjd</code>
-    </div>
-  </div>
-  <script>
-    function copyKey() {
-      navigator.clipboard.writeText('${apiKey}');
-      document.getElementById('hint').textContent = 'Copied!';
-      document.getElementById('hint').classList.add('copied');
-    }
-  </script>
-</body>
-</html>`;
+function htmlResponse(body, method) {
+  return new Response(method === 'HEAD' ? null : body, { headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', ...SECURITY } });
 }
 
-/**
- * Generate error page HTML
- */
-function generateErrorHTML(message) {
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Spydergoat - Error</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', monospace;
-      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
-      color: #e8e8e8;
-    }
-    .card {
-      background: rgba(255,255,255,0.05);
-      border: 2px solid #ff6b6b;
-      border-radius: 12px;
-      padding: 3rem;
-      max-width: 500px;
-      text-align: center;
-    }
-    h1 { font-size: 1.5rem; font-weight: 300; margin-bottom: 1rem; color: #ff6b6b; }
-    p { color: #888; }
-    a { color: #00d9ff; }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <h1>Error</h1>
-    <p>${message}</p>
-    <p style="margin-top: 1rem;"><a href="/">Back to home</a></p>
-  </div>
-</body>
-</html>`;
-}
-
-/**
- * Handle success page - look up API key from Stripe session
- */
-async function handleSuccess(request, env) {
+async function handle(request, env) {
   const url = new URL(request.url);
-  const sessionId = url.searchParams.get('session_id');
+  const path = url.pathname;
+  const method = request.method;
+  const isApi = path === '/mjd' || path === '/jd';
 
-  if (!sessionId) {
-    return new Response(generateErrorHTML('Missing session ID'), {
-      status: 400,
-      headers: { 'Content-Type': 'text/html' }
-    });
+  if (method === 'OPTIONS') {
+    if (!isApi) return new Response(null, { status: 405, headers: { Allow: 'GET, HEAD' } });
+    return new Response(null, { status: 204, headers: API_CORS });
   }
-
-  // Call Stripe API to get session details
-  const stripeResponse = await fetch(
-    `https://api.stripe.com/v1/checkout/sessions/${sessionId}`,
-    {
-      headers: {
-        'Authorization': `Bearer ${env.STRIPE_SECRET_KEY}`,
-      }
-    }
-  );
-
-  if (!stripeResponse.ok) {
-    return new Response(generateErrorHTML('Invalid session'), {
-      status: 400,
-      headers: { 'Content-Type': 'text/html' }
-    });
+  if (path === '/webhook') {
+    if (method !== 'POST') return json({ error: 'method_not_allowed' }, 405, { Allow: 'POST' });
+    return json({ error: 'billing_not_configured' }, 503);
   }
-
-  const session = await stripeResponse.json();
-  const customerId = session.customer;
-
-  if (!customerId) {
-    return new Response(generateErrorHTML('No customer found'), {
-      status: 400,
-      headers: { 'Content-Type': 'text/html' }
-    });
+  if (!['GET', 'HEAD'].includes(method)) {
+    return json({ error: 'method_not_allowed' }, 405, { Allow: isApi ? 'GET, HEAD, OPTIONS' : 'GET, HEAD' });
   }
-
-  // Look up user in KV
-  const userDataRaw = await env.SPYDERGOAT_KV.get(`user:${customerId}`);
-
-  if (!userDataRaw) {
-    // Webhook might not have fired yet - wait briefly and retry
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    const retryData = await env.SPYDERGOAT_KV.get(`user:${customerId}`);
-
-    if (!retryData) {
-      return new Response(generateErrorHTML('Account not ready. Please refresh in a moment.'), {
-        status: 202,
-        headers: { 'Content-Type': 'text/html' }
-      });
-    }
-
-    const userData = JSON.parse(retryData);
-    return new Response(generateSuccessHTML(userData.api_key), {
-      headers: { 'Content-Type': 'text/html' }
-    });
+  if (path === '/' || path === '/index.html') return htmlResponse(homepage(Date.now()), method);
+  if (path === '/success') return sensitiveUnavailable();
+  if (path === '/robots.txt') return new Response(method === 'HEAD' ? null : 'User-agent: *\nAllow: /\nSitemap: https://spydergoat.com/sitemap.xml\n', { headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
+  if (path === '/sitemap.xml') return new Response(method === 'HEAD' ? null : '<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>https://spydergoat.com/</loc></url></urlset>', { headers: { 'Content-Type': 'application/xml; charset=utf-8' } });
+  if (isApi) {
+    if (request.headers.has('Authorization')) return json({ error: 'paid_access_paused' }, 503, API_CORS);
+    const limit = await checkFreeRateLimit(request, env);
+    if (!limit.allowed) return json({ error: 'rate_limited', message: 'Free tier: 1 request per 30 minutes', retry_after: limit.retryAfter }, 429, { 'Retry-After': String(limit.retryAfter), ...API_CORS });
+    return new Response(method === 'HEAD' ? null : JSON.stringify(buildTimeResponse(Date.now(), path === '/jd')), { headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...API_CORS } });
   }
-
-  const userData = JSON.parse(userDataRaw);
-  return new Response(generateSuccessHTML(userData.api_key), {
-    headers: { 'Content-Type': 'text/html' }
-  });
+  return json({ error: 'not_found', endpoints: ['/', '/mjd', '/jd'] }, 404);
 }
 
-/**
- * Verify Stripe webhook signature
- */
-async function verifyStripeSignature(payload, signature, secret) {
-  const encoder = new TextEncoder();
-  const parts = signature.split(',').reduce((acc, part) => {
-    const [key, value] = part.split('=');
-    acc[key] = value;
-    return acc;
-  }, {});
-
-  const timestamp = parts['t'];
-  const expectedSig = parts['v1'];
-
-  if (!timestamp || !expectedSig) {
-    return { valid: false, error: 'Missing signature components' };
-  }
-
-  // Check timestamp is within 5 minutes
-  const now = Math.floor(Date.now() / 1000);
-  if (Math.abs(now - parseInt(timestamp)) > 300) {
-    return { valid: false, error: 'Timestamp outside tolerance' };
-  }
-
-  // Compute expected signature
-  const signedPayload = `${timestamp}.${payload}`;
-  const key = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign']
-  );
-  const sig = await crypto.subtle.sign('HMAC', key, encoder.encode(signedPayload));
-  const computedSig = Array.from(new Uint8Array(sig))
-    .map(b => b.toString(16).padStart(2, '0'))
-    .join('');
-
-  if (computedSig !== expectedSig) {
-    return { valid: false, error: 'Signature mismatch' };
-  }
-
-  return { valid: true, timestamp };
-}
-
-/**
- * Generate API key
- */
-function generateApiKey() {
-  const bytes = new Uint8Array(24);
-  crypto.getRandomValues(bytes);
-  return 'sg_' + Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
-/**
- * Handle Stripe webhook events
- */
-async function handleStripeWebhook(request, env) {
-  const signature = request.headers.get('stripe-signature');
-  if (!signature) {
-    return new Response(JSON.stringify({ error: 'Missing signature' }), {
-      status: 400,
-      headers: { 'Content-Type': 'application/json' }
-    });
-  }
-
-  const payload = await request.text();
-  const verification = await verifyStripeSignature(payload, signature, env.STRIPE_WEBHOOK_SECRET);
-
-  if (!verification.valid) {
-    return new Response(JSON.stringify({ error: verification.error }), {
-      status: 400,
-      headers: { 'Content-Type': 'application/json' }
-    });
-  }
-
-  const event = JSON.parse(payload);
-
-  switch (event.type) {
-    case 'checkout.session.completed': {
-      const session = event.data.object;
-      const customerId = session.customer;
-      const customerEmail = session.customer_email || session.customer_details?.email;
-      const mode = session.mode; // 'subscription' or 'payment'
-
-      if (mode === 'subscription') {
-        // New subscription - create user with API key
-        const apiKey = generateApiKey();
-        const userData = {
-          stripe_customer_id: customerId,
-          email: customerEmail,
-          api_key: apiKey,
-          wallet_balance: 0,
-          current_period_calls: 0,
-          period_start: Date.now(),
-          subscription_status: 'active',
-          created_at: Date.now()
-        };
-
-        // Store user by customer ID and API key
-        await env.SPYDERGOAT_KV.put(`user:${customerId}`, JSON.stringify(userData));
-        await env.SPYDERGOAT_KV.put(`apikey:${apiKey}`, customerId);
-
-        console.log(`New subscription: ${customerId}, API key: ${apiKey}`);
-      } else if (mode === 'payment') {
-        // Wallet top-up
-        const amountPaid = session.amount_total / 100; // cents to dollars
-        const unitsAdded = Math.floor(amountPaid / 0.001); // $0.001 per unit
-
-        const existingUser = await env.SPYDERGOAT_KV.get(`user:${customerId}`);
-        if (existingUser) {
-          const userData = JSON.parse(existingUser);
-          userData.wallet_balance = (userData.wallet_balance || 0) + unitsAdded;
-          await env.SPYDERGOAT_KV.put(`user:${customerId}`, JSON.stringify(userData));
-          console.log(`Wallet top-up: ${customerId}, +${unitsAdded} units`);
-        }
-      }
-      break;
-    }
-
-    case 'customer.subscription.updated': {
-      const subscription = event.data.object;
-      const customerId = subscription.customer;
-      const status = subscription.status;
-
-      const existingUser = await env.SPYDERGOAT_KV.get(`user:${customerId}`);
-      if (existingUser) {
-        const userData = JSON.parse(existingUser);
-        userData.subscription_status = status;
-        await env.SPYDERGOAT_KV.put(`user:${customerId}`, JSON.stringify(userData));
-        console.log(`Subscription updated: ${customerId}, status: ${status}`);
-      }
-      break;
-    }
-
-    case 'customer.subscription.deleted': {
-      const subscription = event.data.object;
-      const customerId = subscription.customer;
-
-      const existingUser = await env.SPYDERGOAT_KV.get(`user:${customerId}`);
-      if (existingUser) {
-        const userData = JSON.parse(existingUser);
-        userData.subscription_status = 'canceled';
-        await env.SPYDERGOAT_KV.put(`user:${customerId}`, JSON.stringify(userData));
-        console.log(`Subscription canceled: ${customerId}`);
-      }
-      break;
-    }
-
-    case 'invoice.paid': {
-      const invoice = event.data.object;
-      const customerId = invoice.customer;
-
-      // Reset monthly call count on successful payment
-      const existingUser = await env.SPYDERGOAT_KV.get(`user:${customerId}`);
-      if (existingUser) {
-        const userData = JSON.parse(existingUser);
-        userData.current_period_calls = 0;
-        userData.period_start = Date.now();
-        await env.SPYDERGOAT_KV.put(`user:${customerId}`, JSON.stringify(userData));
-        console.log(`Invoice paid, reset calls: ${customerId}`);
-      }
-      break;
-    }
-
-    default:
-      console.log(`Unhandled event type: ${event.type}`);
-  }
-
-  return new Response(JSON.stringify({ received: true }), {
-    status: 200,
-    headers: { 'Content-Type': 'application/json' }
-  });
-}
-
-/**
- * CORS headers
- */
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization'
-};
-
-/**
- * Request handler
- */
-export default {
-  async fetch(request, env, ctx) {
-    const url = new URL(request.url);
-    const path = url.pathname;
-
-    // CORS preflight
-    if (request.method === 'OPTIONS') {
-      return new Response(null, { headers: corsHeaders });
-    }
-
-    // Stripe webhook - POST only, no CORS
-    if (path === '/webhook' && request.method === 'POST') {
-      return handleStripeWebhook(request, env);
-    }
-
-    // Only GET allowed for other routes
-    if (request.method !== 'GET') {
-      return new Response(JSON.stringify({ error: 'method_not_allowed' }), {
-        status: 405,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }
-      });
-    }
-
-    // HTML page - no rate limit (for browser access)
-    if (path === '/' || path === '/index.html') {
-      const now = Date.now();
-      const mjd = getMJD(now);
-      const utc = new Date(now).toISOString();
-      return new Response(generateHTML(mjd, utc, env), {
-        headers: { 'Content-Type': 'text/html', 'Cache-Control': 'no-store', ...corsHeaders }
-      });
-    }
-
-    // Success page - show API key after checkout
-    if (path === '/success') {
-      return handleSuccess(request, env);
-    }
-
-    // API endpoints - rate limited
-    if (path === '/mjd' || path === '/jd') {
-      const rateCheck = await checkRateLimit(request, env);
-
-      if (!rateCheck.allowed) {
-        return new Response(JSON.stringify({
-          error: 'rate_limited',
-          message: 'Free tier: 1 request per 30 minutes',
-          retry_after: rateCheck.retryAfter
-        }), {
-          status: 429,
-          headers: {
-            'Content-Type': 'application/json',
-            'Retry-After': rateCheck.retryAfter.toString(),
-            ...corsHeaders
-          }
-        });
-      }
-
-      const now = Date.now();
-      const includeJD = path === '/jd';
-
-      return new Response(JSON.stringify(buildTimeResponse(now, includeJD)), {
-        headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...corsHeaders }
-      });
-    }
-
-    // 404
-    return new Response(JSON.stringify({
-      error: 'not_found',
-      endpoints: ['/', '/mjd', '/jd']
-    }), {
-      status: 404,
-      headers: { 'Content-Type': 'application/json', ...corsHeaders }
-    });
-  }
-};
+export default { fetch: handle };
