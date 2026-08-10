@@ -82,14 +82,18 @@ describe('SpyderGoat v1.1', () => {
     expect(screen.getByRole('button', { name: /try again/i })).toBeEnabled();
   });
 
-  it('fails gracefully when calibration is rate-limited or unavailable', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 429 }));
+  it('reports the retry window when calibration is rate-limited', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      headers: { get: (name: string) => name === 'Retry-After' ? '1800' : null },
+    }));
     const user = userEvent.setup();
 
     render(<App />);
     await user.click(screen.getByRole('button', { name: /calibrate/i }));
 
-    expect(await screen.findByText(/calibration unavailable/i)).toBeInTheDocument();
+    expect(await screen.findByText(/rate limit reached.*30 minutes/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /try again/i })).toBeEnabled();
   });
 });

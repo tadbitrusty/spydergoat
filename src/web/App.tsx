@@ -93,7 +93,21 @@ function useTimeReceipt() {
     setClock(previous => ({ ...previous, status: 'Requesting a fresh server receipt…' }));
     try {
       const response = await fetch('/mjd', { headers: { Accept: 'application/json' } });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      if (!response.ok) {
+        if (response.status === 429) {
+          if (!mounted.current) return;
+          const retrySeconds = Number(response.headers?.get('Retry-After'));
+          const retryMinutes = Number.isFinite(retrySeconds) && retrySeconds > 0
+            ? Math.ceil(retrySeconds / 60)
+            : 30;
+          setClock(previous => ({
+            ...previous,
+            status: `Calibration unavailable. Rate limit reached; try again in ${retryMinutes} ${retryMinutes === 1 ? 'minute' : 'minutes'}.`,
+          }));
+          return;
+        }
+        throw new Error(`HTTP ${response.status}`);
+      }
       const data: unknown = await response.json();
       if (!isReceipt(data)) throw new Error('Unexpected response shape');
       if (!mounted.current) return;
