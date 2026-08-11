@@ -132,6 +132,8 @@ pre { margin: 0; white-space: pre-wrap; }
 .price-card > strong { margin: 56px 0 12px; color: var(--star); font-size: 36px; }
 .price-card strong small { color: var(--muted); font-size: 14px; font-weight: 500; }
 .price-card p { flex: 1; color: var(--muted); line-height: 1.7; }
+.price-card form { margin: 0; }
+.checkout-status { display: block; min-height: 1.5em; margin-top: 10px; color: var(--muted); font-size: 13px; line-height: 1.5; }
 .price-card .button { align-self: flex-start; }
 
 .site-footer { min-height: 150px; display: grid; grid-template-columns: 1fr auto auto; gap: 30px; align-items: center; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }

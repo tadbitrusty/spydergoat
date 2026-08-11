@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 
 type TimeReceipt = {
   mjd: number;
@@ -175,6 +175,8 @@ const whyCards = [
 export default function App() {
   const { display, status, loading, calibrate } = useTimeReceipt();
   const [copied, setCopied] = useState(false);
+  const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const [checkoutStatus, setCheckoutStatus] = useState('');
   const documentedReceipt = display.source === 'server' ? display : DOCUMENTED_RECEIPT;
   const responseExample = JSON.stringify({
     mjd: Number(documentedReceipt.mjd.toFixed(8)),
@@ -190,6 +192,25 @@ export default function App() {
       window.setTimeout(() => setCopied(false), 1_800);
     } catch {
       setCopied(false);
+    }
+  }
+
+  async function startCheckout(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (checkoutLoading) return;
+    setCheckoutLoading(true);
+    setCheckoutStatus('Opening secure Stripe Checkout…');
+    try {
+      const response = await fetch('/checkout/pro', { method: 'POST', headers: { Accept: 'application/json' } });
+      const payload = await response.json();
+      const checkoutUrl = new URL(payload?.checkout_url);
+      if (!response.ok || checkoutUrl.protocol !== 'https:' || checkoutUrl.hostname !== 'checkout.stripe.com') {
+        throw new Error('Checkout unavailable');
+      }
+      window.location.assign(checkoutUrl.toString());
+    } catch {
+      setCheckoutLoading(false);
+      setCheckoutStatus('Checkout is temporarily unavailable. Please try again.');
     }
   }
 
@@ -287,10 +308,10 @@ export default function App() {
         </section>
 
         <section id="pricing" className="content-section section-wrap">
-          <div className="section-heading"><div><span className="kicker">Access</span><h2>Free endpoint available. Paid access paused.</h2></div><p>Billing stays off until transactional accounting, account binding, and key delivery pass supervised rehearsal.</p></div>
+          <div className="section-heading"><div><span className="kicker">Access</span><h2>Free endpoint available. Pro access live.</h2></div><p>Subscribe through Stripe for a one-time API-key delivery and 5,000 authenticated requests each monthly billing period.</p></div>
           <div className="pricing-grid">
             <article className="price-card available"><div className="price-top"><span>Free</span><b>Available</b></div><strong>$0</strong><p>One request per IP every 30 minutes. No signup.</p><a className="button primary" href="/mjd">Use /mjd</a></article>
-            <article className="price-card paused"><div className="price-top"><span>Pro</span><b>Paused</b></div><strong>$4.89<small>/month</small></strong><p>5,000 included requests. Checkout remains unavailable during the billing rebuild.</p></article>
+            <article className="price-card available"><div className="price-top"><span>Pro</span><b>Available</b></div><strong>$4.89<small>/month</small></strong><p>5,000 authenticated MJD/JD requests per monthly billing period. Your API key is shown once after payment.</p><form action="/checkout/pro" method="post" onSubmit={startCheckout}><button className="button primary" type="submit" disabled={checkoutLoading}>{checkoutLoading ? 'Opening…' : 'Get Pro'}</button></form><output className="checkout-status" aria-live="polite">{checkoutStatus}</output></article>
             <article className="price-card paused"><div className="price-top"><span>Wallet</span><b>Paused</b></div><strong>$0.001<small>/request</small></strong><p>Top-ups remain disabled until credits have deterministic account binding and ledger receipts.</p></article>
           </div>
         </section>

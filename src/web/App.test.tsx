@@ -18,7 +18,7 @@ afterEach(() => {
 });
 
 describe('SpyderGoat v1.1', () => {
-  it('renders the complete free-only product surface without payment links', () => {
+  it('renders the live Pro checkout surface without exposing a vendor URL', () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
 
@@ -37,9 +37,27 @@ describe('SpyderGoat v1.1', () => {
     expect(screen.getByRole('heading', { name: /time as one comparable number/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /where a shared reference helps/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /whole public api/i })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: /paid access paused/i })).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: /buy|get api key|subscribe/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /pro access live/i })).toBeInTheDocument();
+    const checkoutButton = screen.getByRole('button', { name: /get pro/i });
+    expect(checkoutButton.closest('form')).toHaveAttribute('action', '/checkout/pro');
+    expect(checkoutButton.closest('form')).toHaveAttribute('method', 'post');
+    expect(document.querySelector('a[href*="stripe"]')).not.toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('posts the Pro action to the first-party Checkout route and reports failure safely', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, json: async () => ({ error: 'checkout_unavailable' }) });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: /get pro/i }));
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith('/checkout/pro', {
+      method: 'POST', headers: { Accept: 'application/json' },
+    });
+    expect(await screen.findByText(/checkout is temporarily unavailable/i)).toBeInTheDocument();
   });
 
   it('uses a valid Worker bootstrap without spending a free API request', () => {

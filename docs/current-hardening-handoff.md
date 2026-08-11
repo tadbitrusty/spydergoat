@@ -51,15 +51,15 @@ Production D1 has the secure authority schema, a delivery secret is configured i
 
 ## Verification at this checkpoint
 
-- Fresh cutover gate passed after production-shaped compatibility fixes: 84 Worker tests, 5 React tests, type/syntax checks, disposable-D1 rehearsal, Vite production build, both dependency audits, Wrangler deploy dry-run, and `git diff --check`.
+- Fresh cutover gate passed after production-shaped compatibility fixes and the live Pro UI exposure: 84 Worker tests, 6 React tests, type/syntax checks, disposable-D1 rehearsal, Vite production build, both dependency audits, Wrangler deploy dry-run, and `git diff --check`.
 - Dependency audits passed with zero production or development vulnerabilities; added-line secret/dangerous-code scan returned zero findings.
 - Production D1 verification passed: the paid event is processed once; one active entitlement has a valid period and one consumed call; one digest-only credential and one consumed one-time delivery exist.
-- All three required Worker secrets are present by name. Live Worker version `1ee60f31-28c5-4ac4-bb53-463d9c85275f` has paid access enabled.
+- All three required Worker secrets are present by name. Live Worker version `83daaa58-7f07-4cb9-8fcd-1da9c490308c` has paid access enabled.
 - Live cutover smoke passed: one real $4.89 Checkout completed; the signed webhook retry succeeded with zero pending deliveries; one-time key claim returned 200 and replay returned 409 without a key; authenticated HEAD returned 200 quota-neutral; authenticated GET returned 200 with 4,999 remaining; an invalid key returned 401. Repeated `/mjd` and `/jd` HEAD checks returned 200, wrong-origin Checkout returned 403, and malformed success claims returned 400.
 - Live Stripe readback passed: active $4.89 monthly recurring Pro price, corrected Pro description, enabled webhook, and complete six-event lifecycle set.
-- Browser UI was not changed. Existing browser evidence was not reused as proof of paid behavior.
+- Live browser verification confirms the homepage says `Pro access live`, marks Pro `Available`, and exposes a first-party `Get Pro` button without embedding a Stripe vendor URL.
 
-## Remaining paid blockers
+## Paid blockers: resolved
 
 The live Stripe catalog correction is complete and read back through Stripe: the Pro description now states the exact 5,000 authenticated MJD/JD requests per monthly billing period. The enabled live webhook preserves its existing events and now also includes `customer.subscription.updated` and `invoice.payment_failed`.
 
