@@ -4,6 +4,7 @@ import {
   authenticateApiKey,
   consumePaidRequest,
   createProCheckout,
+  generateApiKey,
   hashApiKey,
   processStripeEvent,
   validateCheckoutSession,
@@ -148,11 +149,43 @@ test('concurrent allowance accounting does not lose updates or overspend wallet'
 });
 
 test('duplicate subscription event neither rotates nor creates a second key', async () => {
-  const repo = new AtomicRepository();
+  const commands = [];
+  const repo = {
+    seen: false,
+    async applyStripeEventOnce(eventId, command) {
+      commands.push(command);
+      if (this.seen) return { replayed: true };
+      this.seen = true;
+      return { replayed: false };
+    },
+  };
   const event = { id: 'evt_sub', type: 'checkout.session.completed', data: { object: validSession() } };
-  assert.equal((await processStripeEvent(repo, event, catalog, { livemode: false })).replayed, false);
-  assert.equal((await processStripeEvent(repo, event, catalog, { livemode: false })).replayed, true);
-  assert.equal(repo.keys, 1);
+  const options = { livemode: false, deliverySecret: new Uint8Array(32).fill(9), now: () => 1_000 };
+  assert.equal((await processStripeEvent(repo, event, catalog, options)).replayed, false);
+  assert.equal((await processStripeEvent(repo, event, catalog, options)).replayed, true);
+  assert.equal(commands.length, 2);
+  assert.equal(commands[0].kind, 'provision');
+  assert.equal(commands[0].accountId, 'acct_1');
+  assert.equal(commands[0].checkoutSessionId, 'cs_1');
+  assert.match(commands[0].credentialId, /^cred_/);
+  assert.match(commands[0].keyDigest, /^[0-9a-f]{64}$/);
+  assert.match(commands[0].displaySuffix, /^[0-9a-f]{8}$/);
+  assert.equal(commands[0].deliveryExpiresAt, 1_600);
+  assert.equal(commands[0].encryptedKey instanceof Uint8Array, true);
+  assert.equal(commands[0].iv.byteLength, 12);
+  assert.equal(JSON.stringify(commands[0]).includes('sg_'), false);
+  assert.notEqual(commands[1].keyDigest, commands[0].keyDigest);
+});
+
+test('API key generation uses 24 random bytes for sg_ plus 48 lowercase hex characters', () => {
+  let requested;
+  const key = generateApiKey(bytes => {
+    requested = bytes.byteLength;
+    bytes.fill(0xab);
+    return bytes;
+  });
+  assert.equal(requested, 24);
+  assert.equal(key, `sg_${'ab'.repeat(24)}`);
 });
 
 test('malformed checkout event without an id fails closed', async () => {
@@ -198,6 +231,10 @@ test('raw API keys never appear in structured logs', async () => {
   const lines = [];
   const logger = { info(event, fields) { lines.push(JSON.stringify({ event, ...fields })); } };
   const repo = { async applyStripeEventOnce() { return { replayed: false }; } };
-  await processStripeEvent(repo, { id: 'evt_log', type: 'checkout.session.completed', data: { object: validSession() } }, catalog, { livemode: false, logger, generatedApiKey: raw });
+  await processStripeEvent(repo, { id: 'evt_log', type: 'checkout.session.completed', data: { object: validSession() } }, catalog, {
+    livemode: false,
+    logger,
+    deliverySecret: new Uint8Array(32).fill(8),
+  });
   assert.equal(lines.join('\n').includes(raw), false);
 });

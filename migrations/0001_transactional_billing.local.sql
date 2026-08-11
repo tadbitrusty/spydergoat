@@ -17,12 +17,15 @@ CREATE TABLE accounts (
 CREATE TABLE api_credentials (
   id TEXT PRIMARY KEY,
   account_id TEXT NOT NULL REFERENCES accounts(id),
+  checkout_session_id TEXT NOT NULL UNIQUE,
   key_digest TEXT NOT NULL UNIQUE,
   display_suffix TEXT NOT NULL,
   created_at INTEGER NOT NULL DEFAULT (unixepoch()),
   revoked_at INTEGER
 );
 CREATE INDEX api_credentials_account_idx ON api_credentials(account_id);
+CREATE UNIQUE INDEX api_credentials_one_active_account_idx
+  ON api_credentials(account_id) WHERE revoked_at IS NULL;
 
 CREATE TABLE stripe_events (
   event_id TEXT PRIMARY KEY,
@@ -42,14 +45,12 @@ CREATE TABLE wallet_ledger (
 );
 CREATE INDEX wallet_ledger_account_idx ON wallet_ledger(account_id, created_at);
 
--- One-time key delivery requires a separately approved encryption-key contract.
 -- No plaintext API key column is permitted in this schema.
 CREATE TABLE key_deliveries (
   checkout_session_id TEXT PRIMARY KEY,
   account_id TEXT NOT NULL REFERENCES accounts(id),
   encrypted_key BLOB NOT NULL,
   iv BLOB NOT NULL,
-  nonce_digest TEXT NOT NULL UNIQUE,
   expires_at INTEGER NOT NULL,
   consumed_at INTEGER,
   created_at INTEGER NOT NULL DEFAULT (unixepoch())

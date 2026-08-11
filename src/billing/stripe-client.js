@@ -43,6 +43,7 @@ export class StripeBillingClient {
       || price?.unit_amount !== amount
       || price?.type !== 'recurring'
       || price?.recurring?.interval !== 'month'
+      || price?.recurring?.interval_count !== 1
       || returnedProduct !== productId
     ) {
       throw new Error('Stripe catalog does not match the configured Pro subscription');

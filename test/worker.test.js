@@ -179,7 +179,7 @@ test('enabled Pro checkout binds a server account and sends an allowlisted Strip
     if (init.method === 'GET') {
       return Response.json({
         id: 'price_pro', active: true, currency: 'usd', unit_amount: 489,
-        type: 'recurring', recurring: { interval: 'month' }, product: 'prod_pro',
+        type: 'recurring', recurring: { interval: 'month', interval_count: 1 }, product: 'prod_pro',
       });
     }
     stripeRequest = { url: String(url), init, body: new URLSearchParams(init.body) };

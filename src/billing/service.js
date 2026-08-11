@@ -1,7 +1,18 @@
+import { encryptApiKeyDelivery } from './key-delivery.js';
+
 const encoder = new TextEncoder();
+const DEFAULT_DELIVERY_TTL_SECONDS = 600;
+const MAX_DELIVERY_TTL_SECONDS = 900;
 
 function hex(bytes) {
   return [...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+export function generateApiKey(fillRandom = bytes => crypto.getRandomValues(bytes)) {
+  const bytes = new Uint8Array(24);
+  const filled = fillRandom(bytes);
+  if (filled !== bytes) throw new Error('API key random source must fill the supplied bytes');
+  return `sg_${hex(bytes)}`;
 }
 
 export async function hashApiKey(rawKey) {
@@ -97,9 +108,36 @@ export async function processStripeEvent(repository, event, catalog, options = {
   const validation = validateCheckoutSession(session, catalog, { livemode: options.livemode, accountId });
   if (!validation.ok) throw new Error(validation.error);
 
-  const command = validation.item.mode === 'subscription'
-    ? { kind: 'provision', accountId, customerId: validation.customerId }
-    : { kind: 'credit', accountId, customerId: validation.customerId, credits: validation.item.credits };
+  let command;
+  if (validation.item.mode === 'subscription') {
+    const ttl = options.deliveryTtlSeconds ?? DEFAULT_DELIVERY_TTL_SECONDS;
+    if (!Number.isInteger(ttl) || ttl < 1 || ttl > MAX_DELIVERY_TTL_SECONDS) {
+      throw new Error('API key delivery expiry must be between 1 and 900 seconds');
+    }
+    if (!session?.id) throw new Error('Checkout Session ID is required');
+    const now = (options.now || (() => Math.floor(Date.now() / 1000)))();
+    const rawKey = generateApiKey(options.fillRandom);
+    const delivery = await encryptApiKeyDelivery(rawKey, {
+      secret: options.deliverySecret,
+      accountId,
+      checkoutSessionId: session.id,
+      expiresAt: now + ttl,
+    });
+    command = {
+      kind: 'provision',
+      accountId,
+      customerId: validation.customerId,
+      checkoutSessionId: session.id,
+      credentialId: `cred_${crypto.randomUUID()}`,
+      keyDigest: await hashApiKey(rawKey),
+      displaySuffix: rawKey.slice(-8),
+      encryptedKey: delivery.encryptedKey,
+      iv: delivery.iv,
+      deliveryExpiresAt: delivery.expiresAt,
+    };
+  } else {
+    command = { kind: 'credit', accountId, customerId: validation.customerId, credits: validation.item.credits };
+  }
   const result = await repository.applyStripeEventOnce(event.id, command);
   options.logger?.info?.('stripe_event_processed', { eventId: event.id, type: event.type, replayed: Boolean(result.replayed) });
   return result;

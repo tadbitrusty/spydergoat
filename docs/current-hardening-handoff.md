@@ -1,6 +1,6 @@
 # SpyderGoat Current Hardening Handoff
 
-**Updated:** 2026-08-11T08:14:54-05:00
+**Updated:** 2026-08-11
 **Branch:** `feature/paid-access-v1`
 **Baseline:** tagged v1.1.1 plus current local paid-access work
 **Posture:** local hardening in progress; no push or deploy authorized
@@ -30,46 +30,38 @@ Read in this order:
 
 ## Current local slice
 
-Uncommitted paid-access work is implementing the pending-account/Checkout seam from Task 2 of the paid rebuild plan:
+Current paid-access work implements the bounded issuance/delivery seams from Tasks 3–4 of the paid rebuild plan:
 
-- `POST /checkout/pro` exists behind `PAID_ACCESS_ENABLED=true`.
-- Request Origin must match the configured checkout allowlist.
-- D1 and Stripe configuration are required.
-- The server generates a pending internal account before contacting Stripe.
-- The server fetches the configured Stripe Price and requires an exact active monthly product/currency/amount match before Checkout creation.
-- Stripe creation failure moves the pending account to `checkout_failed` for an explicit recovery trail.
-- Checkout URL responses are constrained to Stripe’s HTTPS checkout host.
-- Unexpected request bodies are rejected before D1 or Stripe.
-- Default/local unconfigured behavior remains 503.
+- API keys are generated as `sg_` plus 48 cryptographically random lowercase hex characters.
+- SHA-256 digest is the only persisted authentication authority; D1 also stores an eight-character display suffix.
+- The temporary copy is AES-GCM encrypted with an injected exactly-32-byte secret and a fresh 12-byte IV.
+- Account ID, Checkout Session ID, and expiry are cryptographically bound as additional authenticated data.
+- Delivery defaults to ten minutes and cannot be configured beyond fifteen minutes in this service seam.
+- Account activation, credential insertion, encrypted delivery insertion, and Stripe event processing share one D1 batch guarded by the event claim.
+- Checkout Session and one-active-key constraints reject duplicate issuance; delivery insertion requires the matching newly persisted digest.
+- `claimKeyDeliveryOnce` consumes one unexpired account/session-bound row with one conditional `UPDATE ... RETURNING`; the service decrypts only that claimed envelope.
+- `/success` and `/webhook` Worker behavior was not wired and remains fail-closed.
 
-When deliberately enabled and configured, this slice can initiate a Stripe Checkout flow capable of accepting payment. It does not fulfill paid access, process webhooks, issue keys, deliver keys, authenticate paid requests, or reset billing periods. Enabling it is therefore a money-path boundary requiring explicit approval, not an inert configuration change.
+This slice does not make paid access available. No Worker route can currently issue or reveal the key, no secret is configured, and no migration was applied.
 
 ## Verification at this checkpoint
 
-- `npm test`: 47 Node Worker/billing/static tests and 5 React tests passed.
-- `npm run check`: TypeScript plus Worker, billing, signature, and Stripe-client syntax passed.
-- `npm run build`: Vite production build passed; no public source map emitted.
-- `npm audit`: zero known vulnerabilities.
-- `npm audit --omit=dev`: zero known vulnerabilities.
-- `npx wrangler deploy --dry-run`: passed; 29.54 KiB raw / 9.65 KiB gzip; KV, D1, Assets, and environment bindings detected; no deploy.
-- `git diff --check`: passed.
-- Authority-path assertions: active plan, paid plan, current handoff, archive index, archived concept plan, and archived legacy schema all present.
-- Browser UI was not changed in this authority slice. The v1.1 candidate receipt remains the latest repository-resident browser evidence; v1.1.1 has current automated logo coverage but no separate browser receipt.
+- Focused RED/GREEN and final local gate receipts are recorded in the implementing session handoff; final command results must be re-run against the exact candidate before packaging.
+- Browser UI was not changed. Existing browser evidence was not reused as proof of paid behavior.
 
 ## Remaining paid blockers
 
-1. Idempotent digest-only key issuance.
+1. Independent review and packaging of the current issuance/delivery candidate.
 2. Complete reviewed versioned D1 migration posture.
-3. Encrypted expiring one-time key delivery.
-4. Signed webhook runtime integration and body limits.
-5. Renewal/reset, failure, cancellation, and event-order semantics.
-6. Transactional 5,000-call period boundary.
-7. Bearer authentication and allowance consumption.
-8. Disposable local-D1 end-to-end rehearsal.
-9. Separately authorized Stripe test-mode rehearsal.
-10. Separately authorized production-dark configuration and deploy.
-11. Explicit authorization before accepting real payment.
+3. Signed webhook and success-route runtime integration and body limits.
+4. Renewal/reset, failure, cancellation, and event-order semantics.
+5. Transactional 5,000-call period boundary.
+6. Bearer authentication and allowance consumption.
+7. Disposable local-D1 end-to-end rehearsal.
+8. Separately authorized Stripe test-mode rehearsal.
+9. Separately authorized production-dark configuration and deploy.
+10. Explicit authorization before accepting real payment.
 
 ## Hard stop-lines
 
-No commit, push, merge, deploy, D1 migration, Stripe action, secret change, DNS mutation, customer-data access, publication, email, or payment acceptance is authorized by this handoff.
+Adam's current directive authorizes autonomous local implementation, disposable-D1 rehearsal, verification, and clean local commits. No push, merge, deploy, remote D1 migration, Stripe action, secret change, DNS mutation, customer-data access, publication, email, or payment acceptance is authorized.

@@ -65,19 +65,17 @@ Wallet stays paused until the simpler subscription lifecycle is proven. The exis
 
 ### Current execution checkpoint — local only
 
-Task 2 is locally implemented and awaiting final packaging review on `feature/paid-access-v1`: the dirty candidate adds a capability-gated `POST /checkout/pro`, server-generated pending account identity, exact-Origin allowlisting, unexpected-body rejection, exact Stripe Price preflight, explicit failed-checkout account state, and a constrained Stripe Checkout client. This work is not committed, released, or enabled.
+Tasks 3–4 now have a bounded local candidate on `feature/paid-access-v1`: checkout completion service processing generates `sg_` plus 48 random hex characters, treats only the SHA-256 digest as authentication authority, stores an eight-character display suffix, and creates a ten-minute AES-GCM delivery envelope using an injected exactly-32-byte secret. Account ID, Checkout Session ID, and expiry are authenticated as AES-GCM additional data. D1 provisioning places account activation, credential digest, delivery envelope, and Stripe event receipt in one transactional batch; unique session/account constraints and event claims fail closed against duplicate credentials or a second delivery. Atomic claim/decrypt repository and service seams exist, but Worker `/success` and `/webhook` routes remain deliberately unwired and fail closed. This work is not committed, released, or enabled.
 
 ### Missing before money can move
 
-1. Complete independent review and packaging of the pending-account/Checkout slice.
-2. No API-key generation and credential insertion in the real D1 repository.
-3. No encrypted one-time key-delivery implementation.
-4. No live Worker webhook integration.
-5. No renewal/reset, cancellation, or failed-payment event handling.
-6. No verified period-boundary behavior for the 5,000-call allowance.
-7. No local D1 migration rehearsal receipt.
-8. No Stripe test-mode catalog/webhook rehearsal.
-9. No production migration, secrets, products/prices, or guarded enable flag.
+1. Complete independent review and packaging of the digest-only issuance and one-time-delivery candidate.
+2. No live Worker webhook or success-route integration.
+3. No renewal/reset, cancellation, or failed-payment event handling.
+4. No verified period-boundary behavior for the 5,000-call allowance.
+5. No local D1 migration rehearsal receipt.
+6. No Stripe test-mode catalog/webhook rehearsal.
+7. No production migration, secrets, products/prices, or guarded enable flag.
 
 **Current launch posture:** Paid launch remains **NO-GO**, correctly and intentionally.
 

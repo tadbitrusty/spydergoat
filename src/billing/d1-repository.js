@@ -10,7 +10,9 @@ export class D1BillingRepository {
       VALUES (?1, 'pending', unixepoch(), unixepoch())
       ON CONFLICT(id) DO NOTHING
     `).bind(accountId).run();
-    if (!result?.success) throw new Error('Pending billing account was not created');
+    if (!result?.success || Number(result?.meta?.changes || 0) !== 1) {
+      throw new Error('Pending billing account was not created');
+    }
   }
 
   async markCheckoutFailed(accountId) {
@@ -19,7 +21,9 @@ export class D1BillingRepository {
       SET subscription_status = 'checkout_failed', updated_at = unixepoch()
       WHERE id = ?1 AND subscription_status = 'pending'
     `).bind(accountId).run();
-    if (!result?.success) throw new Error('Pending billing account failure was not recorded');
+    if (!result?.success || Number(result?.meta?.changes || 0) !== 1) {
+      throw new Error('Pending billing account failure was not recorded');
+    }
   }
 
   async findAccountByKeyDigest(digest) {
@@ -76,11 +80,38 @@ export class D1BillingRepository {
         ON CONFLICT(id) DO UPDATE SET stripe_customer_id = excluded.stripe_customer_id,
           subscription_status = 'active', updated_at = excluded.updated_at`)
         .bind(command.accountId, command.customerId, created, eventId, claim));
+      statements.push(this.db.prepare(`INSERT INTO api_credentials
+        (id, account_id, checkout_session_id, key_digest, display_suffix, created_at)
+        SELECT ?1, ?2, ?3, ?4, ?5, ?6
+        WHERE EXISTS (SELECT 1 FROM stripe_events WHERE event_id = ?7 AND claim_token = ?8 AND status = 'processing')`)
+        .bind(command.credentialId, command.accountId, command.checkoutSessionId, command.keyDigest,
+          command.displaySuffix, created, eventId, claim));
+      statements.push(this.db.prepare(`INSERT INTO key_deliveries
+        (checkout_session_id, account_id, encrypted_key, iv, expires_at, created_at)
+        SELECT ?1, ?2, ?3, ?4, ?5, ?6
+        WHERE EXISTS (SELECT 1 FROM stripe_events WHERE event_id = ?7 AND claim_token = ?8 AND status = 'processing')
+          AND EXISTS (SELECT 1 FROM api_credentials WHERE checkout_session_id = ?1 AND key_digest = ?9)`)
+        .bind(command.checkoutSessionId, command.accountId, command.encryptedKey, command.iv,
+          command.deliveryExpiresAt, created, eventId, claim, command.keyDigest));
     }
     statements.push(this.db.prepare(`UPDATE stripe_events SET status = 'processed', processed_at = ?1
       WHERE event_id = ?2 AND claim_token = ?3 AND status = 'processing'`).bind(created, eventId, claim));
     const results = await this.db.batch(statements);
     const claimed = Number(results?.[0]?.meta?.changes || 0) === 1;
     return { replayed: !claimed };
+  }
+
+  async claimKeyDeliveryOnce(checkoutSessionId, accountId, now) {
+    const row = await this.db.prepare(`
+      UPDATE key_deliveries
+      SET consumed_at = ?1
+      WHERE checkout_session_id = ?2
+        AND account_id = ?3
+        AND consumed_at IS NULL
+        AND expires_at > ?1
+      RETURNING encrypted_key, iv, expires_at
+    `).bind(now, checkoutSessionId, accountId).first();
+    if (!row) return null;
+    return { encryptedKey: row.encrypted_key, iv: row.iv, expiresAt: row.expires_at };
   }
 }

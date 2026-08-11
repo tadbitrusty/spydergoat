@@ -44,21 +44,20 @@ The v1.1 release line is the stable product baseline. The v1.1 candidate receipt
 
 Paid access remains **NO-GO** and disabled by default.
 
-The active local branch is implementing the Pro-first architecture behind explicit capability and origin gates. The current dirty slice adds a server-generated pending account, exact Stripe Price preflight, and allowlisted Stripe Checkout command for `POST /checkout/pro`, but this is local candidate work—not a live or released customer capability.
+The active local branch is implementing the Pro-first architecture behind explicit capability and origin gates. The current local slice adds digest-only API-key issuance plus an encrypted, expiring, atomic one-time-delivery seam. It is local candidate work only: `/success` and `/webhook` remain fail-closed and no key can be issued or claimed through a Worker route.
 
 Still required before accepting money:
 
 1. Review and complete the versioned D1 migration and reconciliation posture.
-2. Complete idempotent API-key issuance with digest-only authority.
-3. Implement encrypted, expiring, one-time key delivery.
-4. Wire and verify signed Stripe webhooks.
-5. Implement renewal/reset, payment-failure, cancellation, and out-of-order event semantics.
-6. Prove the 5,000-call billing-period boundary transactionally.
-7. Wire bearer authentication and paid allowance consumption.
-8. Rehearse the complete flow against disposable local D1.
-9. Perform separately authorized Stripe test-mode rehearsal.
-10. Perform separately authorized production-dark setup before enabling checkout.
-11. Obtain explicit authorization before accepting real payment.
+2. Independently review and package digest-only issuance and encrypted one-time-delivery seams.
+3. Wire and verify signed Stripe webhooks.
+4. Implement renewal/reset, payment-failure, cancellation, and out-of-order event semantics.
+5. Prove the 5,000-call billing-period boundary transactionally.
+6. Wire bearer authentication and paid allowance consumption.
+7. Rehearse the complete flow against disposable local D1.
+8. Perform separately authorized Stripe test-mode rehearsal.
+9. Perform separately authorized production-dark setup before enabling checkout.
+10. Obtain explicit authorization before accepting real payment.
 
 Wallet top-ups and paid overages remain parked until Pro survives real use.
 

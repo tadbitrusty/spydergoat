@@ -21,7 +21,7 @@ function price(overrides = {}) {
     currency: 'usd',
     unit_amount: 489,
     type: 'recurring',
-    recurring: { interval: 'month' },
+    recurring: { interval: 'month', interval_count: 1 },
     product: 'prod_pro',
     ...overrides,
   };
@@ -55,4 +55,17 @@ test('Stripe client refuses a mismatched catalog price without creating Checkout
   );
   assert.equal(calls.length, 1);
   assert.equal(calls[0].init.method, 'GET');
+});
+
+test('Stripe client refuses a multi-month recurring price without creating Checkout', async () => {
+  const calls = [];
+  const fetcher = async (url, init) => {
+    calls.push({ url: String(url), init });
+    return Response.json(price({ recurring: { interval: 'month', interval_count: 3 } }));
+  };
+  await assert.rejects(
+    () => new StripeBillingClient('test-secret', { fetcher }).createCheckoutSession(command),
+    /catalog/i,
+  );
+  assert.equal(calls.length, 1);
 });
