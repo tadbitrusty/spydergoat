@@ -117,7 +117,7 @@ test('D1 delivery reads before decrypt and consumes with one conditional update'
   const log = [];
   const encryptedKey = new Uint8Array([1, 2, 3]);
   const iv = new Uint8Array(12).fill(4);
-  const db = { prepare(sql) { return statement(sql, log, { encrypted_key: encryptedKey, iv, expires_at: 1_800 }); } };
+  const db = { prepare(sql) { return statement(sql, log, { encrypted_key: [...encryptedKey], iv: [...iv], expires_at: 1_800 }); } };
   const repository = new D1BillingRepository(db);
   const result = await repository.readKeyDelivery('cs_1', 'acct_1', 1_700);
   assert.deepEqual(result, { encryptedKey, iv, expiresAt: 1_800 });

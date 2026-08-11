@@ -6,6 +6,15 @@ function d1Blob(value) {
   throw new Error('D1 BLOB value is invalid');
 }
 
+function fromD1Blob(value) {
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  if (Array.isArray(value) && value.every(byte => Number.isInteger(byte) && byte >= 0 && byte <= 255)) {
+    return Uint8Array.from(value);
+  }
+  throw new Error('D1 returned an invalid BLOB value');
+}
+
 export class D1BillingRepository {
   constructor(db) {
     if (!db) throw new Error('D1 billing repository is not configured');
@@ -189,7 +198,7 @@ export class D1BillingRepository {
         AND expires_at > ?1
     `).bind(now, checkoutSessionId, accountId).first();
     if (!row) return null;
-    return { encryptedKey: row.encrypted_key, iv: row.iv, expiresAt: row.expires_at };
+    return { encryptedKey: fromD1Blob(row.encrypted_key), iv: fromD1Blob(row.iv), expiresAt: row.expires_at };
   }
 
   async consumeKeyDeliveryOnce(checkoutSessionId, accountId, now) {

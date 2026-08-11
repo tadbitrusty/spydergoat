@@ -50,10 +50,9 @@ Still required before accepting money:
 
 1. Review and complete the versioned D1 migration and reconciliation posture.
 2. Independently review and package the complete local paid runtime candidate.
-3. Rehearse the complete flow against disposable local D1.
-4. Perform separately authorized Stripe test-mode rehearsal.
-5. Perform separately authorized production-dark setup before enabling checkout.
-6. Obtain explicit authorization before accepting real payment.
+3. Perform separately authorized Stripe test-mode rehearsal.
+4. Perform separately authorized production-dark setup before enabling checkout.
+5. Obtain explicit authorization before accepting real payment.
 
 Wallet top-ups and paid overages remain parked until Pro survives real use.
 

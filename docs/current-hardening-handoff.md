@@ -30,7 +30,7 @@ Read in this order:
 
 ## Current local slice
 
-Current paid-access work implements the bounded issuance, delivery, signed lifecycle, and transactional bearer seams from Tasks 3–6 of the paid rebuild plan:
+Current paid-access work implements the bounded issuance, delivery, signed lifecycle, transactional bearer, and disposable-D1 rehearsal seams from Tasks 3–7 of the paid rebuild plan:
 
 - API keys are generated as `sg_` plus 48 cryptographically random lowercase hex characters.
 - SHA-256 digest is the only persisted authentication authority; D1 also stores an eight-character display suffix.
@@ -45,6 +45,7 @@ Current paid-access work implements the bounded issuance, delivery, signed lifec
 - Subscription renewal, payment-failure, cancellation, and stale-event behavior is idempotent and ordered by authenticated `event.created`; same-second conflicts disable entitlement as `event_conflict` rather than guessing, and renewals reset calls without changing wallet balance.
 - `/success` retrieves and validates the authoritative Stripe Session, then reveals a correctly bound encrypted delivery only after winning one conditional consume; the response is no-store/no-referrer and fails closed on replay, expiry, or mismatch.
 - Paid bearer GETs authenticate only by SHA-256 digest and consume one call with a single conditional D1 `UPDATE ... RETURNING` inside the proven period. The 5,000-call boundary is exact; HEAD is quota-neutral and parked wallet balance is never spent.
+- `npm run rehearse:d1` applies the local migration to disposable Miniflare D1 and proves pending activation, duplicate fulfillment, real BLOB read/decrypt, one-time delivery, digest auth, exact allowance, renewal, and cancellation. Receipt: `docs/paid-access-local-d1-rehearsal-2026-08-11.md`.
 
 This slice does not make paid access available. The packaged configuration keeps paid access disabled, no delivery secret is configured, and no remote migration was applied.
 
@@ -57,10 +58,9 @@ This slice does not make paid access available. The packaged configuration keeps
 
 1. Independent review and packaging of the complete local paid runtime candidate.
 2. Complete reviewed versioned D1 migration posture.
-3. Disposable local-D1 end-to-end rehearsal.
-4. Separately authorized Stripe test-mode rehearsal.
-5. Separately authorized production-dark configuration and deploy.
-6. Explicit authorization before accepting real payment.
+3. Separately authorized Stripe test-mode rehearsal.
+4. Separately authorized production-dark configuration and deploy.
+5. Explicit authorization before accepting real payment.
 
 ## Hard stop-lines
 

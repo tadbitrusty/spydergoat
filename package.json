@@ -13,8 +13,9 @@
     "test": "npm run test:worker && npm run test:web",
     "test:worker": "node --test test/*.test.js",
     "test:web": "vitest run",
+    "rehearse:d1": "node scripts/rehearse-local-d1.mjs",
     "typecheck": "tsc --noEmit",
-    "check": "npm run typecheck && node --check src/api/worker.js && node --check src/billing/d1-repository.js && node --check src/billing/key-delivery.js && node --check src/billing/service.js && node --check src/billing/stripe.js && node --check src/billing/stripe-client.js",
+    "check": "npm run typecheck && node --check src/api/worker.js && node --check src/billing/d1-repository.js && node --check src/billing/key-delivery.js && node --check src/billing/service.js && node --check src/billing/stripe.js && node --check src/billing/stripe-client.js && node --check scripts/rehearse-local-d1.mjs",
     "preview": "vite preview",
     "deploy": "npm run build && wrangler deploy"
   },
