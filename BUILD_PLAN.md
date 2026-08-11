@@ -46,13 +46,14 @@ Paid access remains **NO-GO** and disabled by default.
 
 The active local branch now contains the bounded Pro-first runtime behind explicit capability and origin gates: hardened Checkout, digest-only key issuance, encrypted expiring one-time delivery, signed/order-safe Stripe lifecycle handling, no-store success delivery, and transactional bearer allowance. The webhook requires exact test/live-mode configuration, rejects mismatched event mode, and disables entitlement on same-second lifecycle ambiguity rather than guessing order. Paid access remains disabled in packaged configuration.
 
+The runtime candidate passed independent authority/security review and the one full release gate. Production D1 is migrated to the secure empty authority schema, and Worker version `9dad18c2-66cd-4951-ae98-52b9c8daa84a` is dark-deployed with `PAID_ACCESS_ENABLED=false`. Receipt: `docs/paid-access-production-dark-release-2026-08-11.md`.
+
 Still required before accepting money:
 
-1. Review and complete the versioned D1 migration and reconciliation posture.
-2. Independently review and package the complete local paid runtime candidate.
-3. Perform separately authorized Stripe test-mode rehearsal.
-4. Perform separately authorized production-dark setup before enabling checkout.
-5. Obtain explicit authorization before accepting real payment.
+1. Make the two held Stripe Dashboard corrections: exact Pro description and complete webhook lifecycle events.
+2. Run one real Checkout → signed webhook → one-time key claim rehearsal and verify failed-payment disablement.
+3. Enable paid access only after that path passes; verify the live kill switch and first customer path.
+4. Commit/push the exact deployed source when separately authorized.
 
 Wallet top-ups and paid overages remain parked until Pro survives real use.
 

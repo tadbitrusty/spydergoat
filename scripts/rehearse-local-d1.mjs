@@ -13,7 +13,7 @@ const mf = new Miniflare({
 
 try {
   const db = await mf.getD1Database('DB');
-  const migration = (await readFile(new URL('../migrations/0001_transactional_billing.local.sql', import.meta.url), 'utf8'))
+  const migration = (await readFile(new URL('../migrations/0001_transactional_billing.sql', import.meta.url), 'utf8'))
     .replace(/^--.*$/gm, '');
   for (const statement of migration.split(';').map(value => value.trim()).filter(Boolean)) {
     await db.prepare(statement).run();

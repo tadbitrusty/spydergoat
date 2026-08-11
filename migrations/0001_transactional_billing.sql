@@ -1,5 +1,18 @@
--- LOCAL DESIGN ONLY. Do not apply remotely without a supervised migration and reconciliation plan.
+-- Immutable production migration for the Pro-first billing authority.
+-- Fail closed if the inventoried-empty legacy users table has gained any row.
 PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY
+);
+CREATE TABLE _migration_guard_empty_legacy_users (
+  row_count INTEGER NOT NULL CHECK (row_count = 0)
+);
+INSERT INTO _migration_guard_empty_legacy_users (row_count)
+SELECT COUNT(*) FROM users;
+DROP TABLE _migration_guard_empty_legacy_users;
+DROP INDEX IF EXISTS idx_users_api_key;
+DROP TABLE users;
 
 CREATE TABLE accounts (
   id TEXT PRIMARY KEY,

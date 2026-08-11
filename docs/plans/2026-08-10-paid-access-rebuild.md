@@ -54,7 +54,7 @@ Wallet stays paused until the simpler subscription lifecycle is proven. The exis
   - Atomic D1 allowance consumption via conditional `UPDATE ... RETURNING`.
   - Credential lookup by digest only.
   - Event claim/deduplication and account provisioning seam.
-- `migrations/0001_transactional_billing.local.sql`
+- `migrations/0001_transactional_billing.sql`
   - Accounts, credential digests, Stripe event receipts, wallet ledger, and encrypted one-time key-delivery shape.
 - Existing billing, D1, Worker, and static tests.
 - Production currently fails closed:
@@ -65,11 +65,11 @@ Wallet stays paused until the simpler subscription lifecycle is proven. The exis
 
 ### Current execution checkpoint — local only
 
-Tasks 3–7 now have a bounded local candidate on `feature/paid-access-v1`: checkout completion generates `sg_` plus 48 random hex characters only after proving the pre-created pending account, treats only the SHA-256 digest as authentication authority, stores an eight-character display suffix, and creates a ten-minute AES-GCM delivery envelope using an injected exactly-32-byte secret. Account ID, Checkout Session ID, and expiry are authenticated as AES-GCM additional data. D1 provisioning places pending-account activation, credential digest, delivery envelope, and Stripe event receipt in one transactional batch; completion is foreign-key-bound to both artifacts so missing authority rolls back rather than leaving an unrecoverable event claim. The gated Worker webhook uses a bounded streaming read, verifies the exact raw body, requires exact Stripe test/live-mode agreement, retrieves the authoritative Checkout Session, and applies renewal/failure/cancellation state. Same-second lifecycle ambiguity disables entitlement instead of guessing order. The gated success route revalidates the authoritative Session and authenticates the encrypted envelope before one conditional consume. Paid bearer GETs use digest-only authentication and one conditional in-period update capped at 5,000; HEAD is neutral and parked wallet funds are untouched. None of this is released or enabled.
+Tasks 3–6 and the bounded fresh-database runtime portion of Task 7 now have a local candidate on `feature/paid-access-v1`: checkout completion generates `sg_` plus 48 random hex characters only after proving the pre-created pending account, treats only the SHA-256 digest as authentication authority, stores an eight-character display suffix, and creates a ten-minute AES-GCM delivery envelope using an injected exactly-32-byte secret. Account ID, Checkout Session ID, and expiry are authenticated as AES-GCM additional data. D1 provisioning places pending-account activation, credential digest, delivery envelope, and Stripe event receipt in one transactional batch; completion is foreign-key-bound to both artifacts so missing authority rolls back rather than leaving an unrecoverable event claim. The gated Worker webhook uses a bounded streaming read, verifies the exact raw body, requires exact Stripe test/live-mode agreement, retrieves the authoritative Checkout Session, and applies renewal/failure/cancellation state. Same-second lifecycle ambiguity disables entitlement instead of guessing order. The gated success route revalidates the authoritative Session and authenticates the encrypted envelope before one conditional consume. Paid bearer GETs use digest-only authentication and one conditional in-period update capped at 5,000; HEAD is neutral and parked wallet funds are untouched. None of this is released or enabled.
 
 ### Missing before money can move
 
-1. Complete independent review and packaging of the complete local paid runtime candidate.
+1. Author and locally rehearse the empty-legacy-guarded immutable production migration, Wrangler once-only apply policy, backup, verification, and forward-fix runbook recorded in `docs/paid-access-migration-review-2026-08-11.md`.
 2. No Stripe test-mode catalog/webhook rehearsal.
 3. No production migration, secrets, products/prices, or guarded enable flag.
 
@@ -295,7 +295,7 @@ Paid launch is **GO** only when all are true:
 - [ ] Stripe catalog identity/amount/mode/live-mode checks pass.
 - [ ] Webhook signature, replay, body-size, and event-order tests pass.
 - [ ] D1 migration was rehearsed from empty state.
-- [ ] No plaintext API key exists in D1, logs, responses, source, or receipts.
+- [ ] No plaintext API key exists in D1, logs, source, receipts, or any response except the intended one-time no-store success disclosure.
 - [ ] Duplicate events cannot create duplicate credentials or credits.
 - [ ] One-time key claim is atomic, expiring, and non-repeatable.
 - [ ] Allowance boundaries and period reset are transactionally proven.

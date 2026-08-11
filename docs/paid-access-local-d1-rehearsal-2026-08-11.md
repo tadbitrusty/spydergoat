@@ -10,7 +10,7 @@ This is evidence for the local candidate, not authorization to migrate, deploy, 
 npm run rehearse:d1
 ```
 
-The script creates an in-memory Miniflare D1 database, applies `migrations/0001_transactional_billing.local.sql`, uses the production billing service and D1 repository, asserts the flow, then disposes the database.
+The script creates an in-memory Miniflare D1 database, applies `migrations/0001_transactional_billing.sql`, uses the production billing service and D1 repository, asserts the flow, then disposes the database.
 
 ## Proven locally
 
