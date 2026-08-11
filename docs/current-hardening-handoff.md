@@ -53,9 +53,10 @@ Production D1 has the secure authority schema, a delivery secret is configured i
 
 - Fresh cutover gate passed after production-shaped compatibility fixes and the live Pro UI exposure: 84 Worker tests, 6 React tests, type/syntax checks, disposable-D1 rehearsal, Vite production build, both dependency audits, Wrangler deploy dry-run, and `git diff --check`.
 - Dependency audits passed with zero production or development vulnerabilities; added-line secret/dangerous-code scan returned zero findings.
-- Production D1 verification passed: the paid event is processed once; one active entitlement has a valid period and one consumed call; one digest-only credential and one consumed one-time delivery exist.
+- Production D1 fulfillment verification passed at cutover: the paid event processed once; one active entitlement had a valid period and one consumed call; one digest-only credential and one consumed one-time delivery existed before the controlled teardown.
 - All three required Worker secrets are present by name. Live Worker version `83daaa58-7f07-4cb9-8fcd-1da9c490308c` has paid access enabled.
 - Live cutover smoke passed: one real $4.89 Checkout completed; the signed webhook retry succeeded with zero pending deliveries; one-time key claim returned 200 and replay returned 409 without a key; authenticated HEAD returned 200 quota-neutral; authenticated GET returned 200 with 4,999 remaining; an invalid key returned 401. Repeated `/mjd` and `/jd` HEAD checks returned 200, wrong-origin Checkout returned 403, and malformed success claims returned 400.
+- Controlled-smoke teardown passed: the live test subscription was canceled immediately in Stripe, the D1 entitlement was ended, its API credential was revoked, and the formerly valid key returned 401. Customer-facing paid Checkout remains live.
 - Live Stripe readback passed: active $4.89 monthly recurring Pro price, corrected Pro description, enabled webhook, and complete six-event lifecycle set.
 - Live browser verification confirms the homepage says `Pro access live`, marks Pro `Available`, and exposes a first-party `Get Pro` button without embedding a Stripe vendor URL.
 

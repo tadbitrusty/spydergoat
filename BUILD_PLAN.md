@@ -58,7 +58,8 @@ Controlled cutover receipt:
 4. Authenticated HEAD returned 200 without consuming quota; authenticated GET returned 200 with 4,999 remaining; a malformed key returned 401.
 5. `/mjd` and `/jd` remained stable across repeated HEAD checks. Wrong-origin Checkout returned 403 and malformed success claims returned 400.
 6. The deployed homepage now advertises Pro as live and exposes a first-party `Get Pro` action without embedding a Stripe vendor URL.
-7. The exact deployed source still requires a separately authorized remote Git push.
+7. After the successful smoke, the controlled subscription was canceled immediately. Stripe readback returned `canceled`; the D1 entitlement was ended, its credential was revoked, and the key returned 401. This teardown did not disable customer Checkout.
+8. The exact deployed source still requires a separately authorized remote Git push.
 
 Wallet top-ups and paid overages remain parked until Pro survives real use.
 
