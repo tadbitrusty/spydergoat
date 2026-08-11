@@ -162,9 +162,26 @@ function checkoutOriginAllowed(request, env) {
   return Boolean(origin && allowed.includes(origin));
 }
 
+async function checkoutBodyIsEmpty(request) {
+  if (!request.body) return true;
+  const reader = request.body.getReader();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) return true;
+      if (value.byteLength > 0) {
+        await reader.cancel('unexpected request body');
+        return false;
+      }
+    }
+  } catch {
+    return false;
+  }
+}
+
 async function handleProCheckout(request, env) {
   if (env.PAID_ACCESS_ENABLED !== 'true') return json({ error: 'paid_access_paused' }, 503);
-  if (request.body !== null) return json({ error: 'unexpected_request_body' }, 400);
+  if (!await checkoutBodyIsEmpty(request)) return json({ error: 'unexpected_request_body' }, 400);
   if (!checkoutOriginAllowed(request, env)) return json({ error: 'origin_not_allowed' }, 403);
   if (!env.DB || !env.STRIPE_SECRET_KEY || !['true', 'false'].includes(env.STRIPE_LIVEMODE)) {
     return json({ error: 'billing_not_configured' }, 503);
@@ -179,7 +196,8 @@ async function handleProCheckout(request, env) {
       cancelUrl: `${origin}/#pricing`,
     });
     return json({ checkout_url: result.checkoutUrl });
-  } catch {
+  } catch (error) {
+    console.error('checkout_unavailable', { reason: String(error?.message || 'unknown') });
     return json({ error: 'checkout_unavailable' }, 503);
   }
 }
@@ -318,11 +336,12 @@ async function handlePaidApi(request, env, path, method) {
   if (!rawKey) return json({ error: 'invalid_api_key' }, 401, { 'WWW-Authenticate': 'Bearer', ...API_CORS });
   try {
     const repository = new D1BillingRepository(env.DB);
-    const account = await authenticateApiKey(repository, rawKey);
+    const now = Math.floor(Date.now() / 1000);
+    const account = await authenticateApiKey(repository, rawKey, now);
     if (method === 'HEAD') {
       return new Response(null, { headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...API_CORS } });
     }
-    const allowance = await consumePaidRequest(repository, account.id, Math.floor(Date.now() / 1000));
+    const allowance = await consumePaidRequest(repository, account.id, now);
     if (!allowance.allowed) {
       return json({ error: 'paid_quota_exhausted' }, 429, { 'X-RateLimit-Limit': '5000', 'X-RateLimit-Remaining': '0', ...API_CORS });
     }

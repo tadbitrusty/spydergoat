@@ -42,18 +42,22 @@ The v1.1 release line is the stable product baseline. The v1.1 candidate receipt
 
 ### Paid access
 
-Paid access remains **NO-GO** and disabled by default.
+Paid access is **LIVE** after a completed controlled cutover smoke.
 
-The active local branch now contains the bounded Pro-first runtime behind explicit capability and origin gates: hardened Checkout, digest-only key issuance, encrypted expiring one-time delivery, signed/order-safe Stripe lifecycle handling, no-store success delivery, and transactional bearer allowance. The webhook requires exact test/live-mode configuration, rejects mismatched event mode, and disables entitlement on same-second lifecycle ambiguity rather than guessing order. Paid access remains disabled in packaged configuration.
+The active local branch contains the bounded Pro-first runtime behind explicit capability and origin gates: hardened Checkout, digest-only key issuance, encrypted expiring one-time delivery, signed/order-safe Stripe lifecycle handling, no-store success delivery, and transactional bearer allowance. The webhook requires exact test/live-mode configuration, rejects mismatched event mode, and disables entitlement on same-second lifecycle ambiguity rather than guessing order. Paid access is enabled in packaged configuration after the successful cutover smoke.
 
-The runtime candidate passed independent authority/security review and the one full release gate. Production D1 is migrated to the secure empty authority schema, and Worker version `9dad18c2-66cd-4951-ae98-52b9c8daa84a` is dark-deployed with `PAID_ACCESS_ENABLED=false`. Receipt: `docs/paid-access-production-dark-release-2026-08-11.md`.
+The runtime candidate passed the full release gate and final independent blocker-only review. The deployed candidate fixes three connected entitlement failures found during review: authenticated `HEAD` validates the active billing period without consuming quota; cancellation preserves an already-active entitlement only through `current_period_end`; and cancellation cannot reactivate access already disabled by failed payment. Live smoke then exposed and fixed two production-only compatibility failures: Cloudflare requires the captured global `fetch` to retain its global binding, and Stripe's live API now returns subscription billing periods on the matching subscription item rather than the legacy subscription root. Production D1 is migrated and Worker configuration now has `PAID_ACCESS_ENABLED=true`.
 
-Still required before accepting money:
+The two held live Stripe corrections are complete and independently read back: the Pro description matches the 5,000-request billing-period contract, and the enabled webhook includes `customer.subscription.updated` plus `invoice.payment_failed` while preserving its existing lifecycle events.
 
-1. Make the two held Stripe Dashboard corrections: exact Pro description and complete webhook lifecycle events.
-2. Run one real Checkout → signed webhook → one-time key claim rehearsal and verify failed-payment disablement.
-3. Enable paid access only after that path passes; verify the live kill switch and first customer path.
-4. Commit/push the exact deployed source when separately authorized.
+Controlled cutover receipt:
+
+1. Adam explicitly authorized cutover and one real $4.89 Checkout completed in live Stripe.
+2. The signed `checkout.session.completed` retry returned success, reached zero pending webhooks, and was recorded once as processed in D1.
+3. D1 contains one active in-period entitlement, one digest-only credential, and one consumed one-time delivery. Replay returned 409 without revealing the key.
+4. Authenticated HEAD returned 200 without consuming quota; authenticated GET returned 200 with 4,999 remaining; a malformed key returned 401.
+5. `/mjd` and `/jd` remained stable across repeated HEAD checks. Wrong-origin Checkout returned 403 and malformed success claims returned 400.
+6. The exact deployed source still requires a separately authorized remote Git push.
 
 Wallet top-ups and paid overages remain parked until Pro survives real use.
 
@@ -91,6 +95,10 @@ Wallet top-ups and paid overages remain parked until Pro survives real use.
 - No product copy may imply atomic time, cryptographic attestation, or an accuracy/uptime guarantee.
 - Incomplete paid behavior must remain visibly and operationally unavailable.
 - Local verification is not production proof.
+
+## Flow stop rule
+
+Single-piece flow does not mean infinite refinement of the current piece. Once its stated requirements and verification gates pass, further refinement is overprocessing and must stop. The only exception is a concrete gross production security hole that prevents forward motion.
 
 ## Verification gate for each local slice
 

@@ -47,28 +47,37 @@ Current paid-access work implements Tasks 3–6 plus the bounded fresh-database 
 - Paid bearer GETs authenticate only by SHA-256 digest and consume one call with a single conditional D1 `UPDATE ... RETURNING` inside the proven period. The 5,000-call boundary is exact; HEAD is quota-neutral and parked wallet balance is never spent.
 - `npm run rehearse:d1` applies the production migration to disposable D1 and proves pending activation, duplicate fulfillment, real BLOB read/decrypt, one-time delivery, digest auth, exact allowance, renewal, and cancellation.
 
-Production D1 now has the secure empty schema, a delivery secret is configured in Cloudflare, and the Worker is dark-deployed. Paid access remains unavailable because packaged configuration explicitly sets `PAID_ACCESS_ENABLED=false`.
+Production D1 has the secure authority schema, a delivery secret is configured in Cloudflare, and paid access is live with packaged configuration explicitly set to `PAID_ACCESS_ENABLED=true`.
 
 ## Verification at this checkpoint
 
-- Independent authority/security review of the complete local candidate at `acede06` passed after 81 Worker tests, 5 React tests, type/syntax checks, and the disposable-D1 rehearsal passed. No runtime security blocker remained in the reviewed scope.
-- Production migration and post-apply verification passed: five secure tables, no legacy table, no plaintext-key column, zero authority rows, no foreign-key violations, and no pending migration.
-- Worker version `9dad18c2-66cd-4951-ae98-52b9c8daa84a` is live production-dark; apex, www, and free API are healthy while Checkout, webhook, and success fail closed.
+- Fresh cutover gate passed after production-shaped compatibility fixes: 84 Worker tests, 5 React tests, type/syntax checks, disposable-D1 rehearsal, Vite production build, both dependency audits, Wrangler deploy dry-run, and `git diff --check`.
+- Dependency audits passed with zero production or development vulnerabilities; added-line secret/dangerous-code scan returned zero findings.
+- Production D1 verification passed: the paid event is processed once; one active entitlement has a valid period and one consumed call; one digest-only credential and one consumed one-time delivery exist.
+- All three required Worker secrets are present by name. Live Worker version `1ee60f31-28c5-4ac4-bb53-463d9c85275f` has paid access enabled.
+- Live cutover smoke passed: one real $4.89 Checkout completed; the signed webhook retry succeeded with zero pending deliveries; one-time key claim returned 200 and replay returned 409 without a key; authenticated HEAD returned 200 quota-neutral; authenticated GET returned 200 with 4,999 remaining; an invalid key returned 401. Repeated `/mjd` and `/jd` HEAD checks returned 200, wrong-origin Checkout returned 403, and malformed success claims returned 400.
+- Live Stripe readback passed: active $4.89 monthly recurring Pro price, corrected Pro description, enabled webhook, and complete six-event lifecycle set.
 - Browser UI was not changed. Existing browser evidence was not reused as proof of paid behavior.
 
 ## Remaining paid blockers
 
-1. Correct the live Pro description and add `customer.subscription.updated` plus `invoice.payment_failed` to the live webhook endpoint. Stripe CLI write access currently no-ops despite successful re-authentication; direct restricted-key use returns 401.
-2. Run one real Checkout → webhook → fulfillment → one-time key claim path and verify failed-payment disablement.
-3. Change `PAID_ACCESS_ENABLED` to true only after those gates pass.
+The live Stripe catalog correction is complete and read back through Stripe: the Pro description now states the exact 5,000 authenticated MJD/JD requests per monthly billing period. The enabled live webhook preserves its existing events and now also includes `customer.subscription.updated` and `invoice.payment_failed`.
 
-## Reboot handoff
+Blocker-only review found three connected entitlement failures in the earlier candidate. The local candidate now requires the active billing period during digest authentication—including quota-neutral `HEAD`; preserves canceled subscription access only while the existing entitlement is active and before `current_period_end`; and prevents a later cancellation event from reactivating access disabled by failed payment. Focused RED/GREEN tests, an executable D1 sequence covering failed-payment → cancellation, and the complete release gate pass.
+
+Final independent blocker-only review: **PASS**. It verified the strict billing-period boundary, quota-neutral authenticated `HEAD`, cancellation-through-period-end behavior, failed-payment disablement, no failed-payment reactivation, and retained event ordering/conflict behavior.
+
+Cutover is complete. Keep `PAID_ACCESS_ENABLED=true`; return it to `false` immediately if production later violates the paid-access contract. Remote Git push remains separately authorized.
+
+## Reboot/OAuth resolution
 
 - Docker Desktop was upgraded from 4.70.0 to 4.86.0; Docker Engine is 29.7.2 and MCP Toolkit is 0.43.3.
 - Docker profiles, images, containers, and named Supabase volumes were preserved; nothing was pruned.
-- Docker MCP OAuth remained in a silent-failure state across all previously authorized tools after the first Desktop restart. Adam elected to reboot the host before retrying OAuth.
-- On return: verify Docker Desktop health, run `/reload-mcp`, authorize only `stripe-remote` first, prove one harmless Stripe read, then complete the two held Stripe corrections. Do not broaden into Cloudflare MCP until the Stripe launch blocker is closed.
+- Docker MCP `stripe-remote` OAuth is authorized. Harmless live reads and both required live Stripe corrections succeeded and were independently read back.
+- Docker MCP's credential-helper path has shown intermittent timeout failures on some fresh gateway processes; this did not invalidate the successful Stripe writes/readbacks and is not a SpyderGoat product blocker.
 
 ## Hard stop-lines
 
-Paid-enable stop-line: do not set `PAID_ACCESS_ENABLED=true` until the held Stripe webhook corrections and one real Checkout/fulfillment/key-claim path pass. Push remains a separate source-control action.
+Paid-enable stop-line was satisfied: the pre-cutover gate passed, Adam explicitly authorized cutover, and the controlled real Checkout/fulfillment/key-claim path passed after bounded production-compatibility fixes. Any future contract failure returns the flag to `false`. Push remains a separate source-control action.
+
+Flow stop-line: once the stated requirements and verification gates pass, stop. Additional refinement is overprocessing unless a concrete gross production security hole blocks forward motion.

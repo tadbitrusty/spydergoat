@@ -81,7 +81,7 @@ try {
     accountId, checkoutSessionId, secret: deliverySecret, now,
   }), null);
 
-  assert.equal((await authenticateApiKey(repository, delivered)).id, accountId);
+  assert.equal((await authenticateApiKey(repository, delivered, now)).id, accountId);
   await db.prepare('UPDATE accounts SET current_period_calls = 4999, wallet_balance = 7 WHERE id = ?1').bind(accountId).run();
   const finalAllowed = await consumePaidRequest(repository, accountId, now);
   const exhausted = await consumePaidRequest(repository, accountId, now);
@@ -95,7 +95,7 @@ try {
     data: { object: {
       customer: 'cus_rehearsal', subscription: 'sub_rehearsal', paid: true, status: 'paid',
       billing_reason: 'subscription_cycle',
-      lines: { data: [{ type: 'subscription', subscription: 'sub_rehearsal', period: { start: now + 3_600, end: now + 7_200 } }] },
+      lines: { data: [{ type: 'subscription', subscription: 'sub_rehearsal', period: { start: now + 1, end: now + 7_200 } }] },
       subscription_details: { metadata: { spydergoat_sku: 'subscription', spydergoat_account_id: accountId } },
     } },
   }, catalog, { livemode: false, now: () => now });
@@ -107,12 +107,30 @@ try {
     id: 'evt_subscription_deleted_rehearsal', type: 'customer.subscription.deleted', created: now + 2, livemode: false,
     data: { object: {
       id: 'sub_rehearsal', customer: 'cus_rehearsal', status: 'canceled',
-      current_period_start: now + 3_600, current_period_end: now + 7_200,
+      current_period_start: now + 1, current_period_end: now + 7_200,
       metadata: { spydergoat_sku: 'subscription', spydergoat_account_id: accountId },
     } },
   }, catalog, { livemode: false, now: () => now });
   assert.equal(canceled.replayed, false);
-  await assert.rejects(() => authenticateApiKey(repository, delivered), /Invalid API key/);
+  assert.equal((await authenticateApiKey(repository, delivered, now + 2)).id, accountId);
+
+  await processStripeEvent(repository, {
+    id: 'evt_invoice_failed_rehearsal', type: 'invoice.payment_failed', created: now + 3, livemode: false,
+    data: { object: {
+      customer: 'cus_rehearsal', subscription: 'sub_rehearsal', paid: false, status: 'open',
+      subscription_details: { metadata: { spydergoat_sku: 'subscription', spydergoat_account_id: accountId } },
+    } },
+  }, catalog, { livemode: false, now: () => now });
+  await processStripeEvent(repository, {
+    id: 'evt_deleted_after_failed_payment', type: 'customer.subscription.deleted', created: now + 4, livemode: false,
+    data: { object: {
+      id: 'sub_rehearsal', customer: 'cus_rehearsal', status: 'canceled',
+      current_period_start: now + 1, current_period_end: now + 7_200,
+      metadata: { spydergoat_sku: 'subscription', spydergoat_account_id: accountId },
+    } },
+  }, catalog, { livemode: false, now: () => now });
+  await assert.rejects(() => authenticateApiKey(repository, delivered, now + 4), /Invalid API key/);
+  await assert.rejects(() => authenticateApiKey(repository, delivered, now + 7_200), /Invalid API key/);
 
   const schema = await db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table'").all();
   assert.equal(JSON.stringify(schema.results).includes('api_key TEXT'), false);
@@ -123,7 +141,7 @@ try {
     credentialAuthority: 'sha256-digest-only',
     delivery: 'one-time-and-replay-closed',
     allowance: '5000-exact-wallet-unchanged',
-    lifecycle: 'renewal-reset-and-cancellation-disable',
+    lifecycle: 'renewal-cancellation-through-period-end-failed-payment-stays-disabled',
   }));
 } finally {
   await mf.dispose();

@@ -9,7 +9,7 @@ function required(value, name) {
 export class StripeBillingClient {
   constructor(secretKey, options = {}) {
     this.secretKey = required(secretKey, 'Stripe secret key');
-    this.fetcher = options.fetcher || globalThis.fetch;
+    this.fetcher = options.fetcher || globalThis.fetch.bind(globalThis);
     if (typeof this.fetcher !== 'function') throw new Error('Stripe fetch implementation is required');
   }
 
@@ -34,10 +34,12 @@ export class StripeBillingClient {
       headers: { Authorization: `Bearer ${this.secretKey}` },
     });
     const price = await priceResponse.json().catch(() => null);
+    if (!priceResponse.ok) {
+      throw new Error(`Stripe catalog lookup failed with status ${priceResponse.status}`);
+    }
     const returnedProduct = typeof price?.product === 'string' ? price.product : price?.product?.id;
     if (
-      !priceResponse.ok
-      || price?.id !== priceId
+      price?.id !== priceId
       || price?.active !== true
       || price?.currency !== currency
       || price?.unit_amount !== amount

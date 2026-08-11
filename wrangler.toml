@@ -27,9 +27,9 @@ run_worker_first = ["/", "/index.html", "/mjd", "/jd", "/checkout/pro", "/succes
 
 [vars]
 ENVIRONMENT = "production"
-# Production-dark billing configuration. Keep false until Stripe credentials,
-# webhook delivery, checkout, fulfillment, and key claim are proven end to end.
-PAID_ACCESS_ENABLED = "false"
+# Paid cutover active after production-shaped edge/fetch and Stripe item-period
+# compatibility fixes. Roll back immediately on any remaining live smoke failure.
+PAID_ACCESS_ENABLED = "true"
 CHECKOUT_ORIGINS = "https://spydergoat.com,https://www.spydergoat.com"
 STRIPE_LIVEMODE = "true"
 STRIPE_PRO_PRODUCT_ID = "prod_TrD9fKtsjdaZmB"

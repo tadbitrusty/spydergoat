@@ -194,9 +194,10 @@ test('paid bearer request authenticates by digest and atomically consumes one in
 
 test('malformed paid bearer fails before D1 and authenticated HEAD is quota-neutral', async () => {
   let updates = 0;
+  const statements = [];
   const db = {
     prepare(sql) {
-      return { bind() { return { async first() {
+      return { bind(...args) { statements.push({ sql, args }); return { async first() {
         if (/SELECT accounts\.id/i.test(sql)) return { id: 'acct_1', active: 1 };
         if (/UPDATE accounts/i.test(sql)) updates++;
         return null;
@@ -206,9 +207,13 @@ test('malformed paid bearer fails before D1 and authenticated HEAD is quota-neut
   const bindings = { ...env(), PAID_ACCESS_ENABLED: 'true', DB: db };
   const malformed = await request('/mjd', { headers: { Authorization: 'Bearer nope' } }, bindings);
   assert.equal(malformed.status, 401);
-  const head = await request('/mjd', { method: 'HEAD', headers: { Authorization: `Bearer sg_${'ef'.repeat(24)}` } }, bindings);
+  const headKey = `sg_${'ef'.repeat(24)}`;
+  const head = await request('/mjd', { method: 'HEAD', headers: { Authorization: ['Bearer', headKey].join(' ') } }, bindings);
   assert.equal(head.status, 200);
   assert.equal(updates, 0);
+  const authentication = statements.find(value => /SELECT accounts\.id/i.test(value.sql));
+  assert.match(authentication.sql, /\?2 >= accounts\.period_start AND \?2 < accounts\.period_end/i);
+  assert.equal(Number.isSafeInteger(authentication.args[1]), true);
 });
 
 test('webhook fails closed when transactional billing is not configured', async () => {
@@ -424,7 +429,8 @@ test('enabled Pro checkout binds a server account and sends an allowlisted Strip
   const stripeRequests = [];
   let stripeRequest;
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (url, init) => {
+  globalThis.fetch = async function (url, init) {
+    assert.equal(this, globalThis);
     stripeRequests.push({ url: String(url), init });
     if (init.method === 'GET') {
       return Response.json({
@@ -455,8 +461,11 @@ test('enabled Pro checkout binds a server account and sends an allowlisted Strip
     },
   };
   try {
+    const emptyEdgeBody = new ReadableStream({ start(controller) { controller.close(); } });
     const response = await request('/checkout/pro', {
       method: 'POST',
+      body: emptyEdgeBody,
+      duplex: 'half',
       headers: { Origin: 'https://spydergoat.test' },
     }, bindings);
     const body = await response.json();

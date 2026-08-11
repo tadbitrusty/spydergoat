@@ -103,6 +103,25 @@ test('checkout validation accepts only the allowlisted paid completed session', 
   assert.equal(result.sku, 'subscription');
 });
 
+test('checkout validation accepts Stripe item-level billing periods from the live API schema', () => {
+  const session = validSession();
+  session.subscription = {
+    ...session.subscription,
+    current_period_start: null,
+    current_period_end: null,
+    items: { data: [{
+      quantity: 1,
+      current_period_start: 1_000,
+      current_period_end: 2_000,
+      price: { id: 'price_pro', product: 'prod_pro' },
+    }] },
+  };
+  const result = validateCheckoutSession(session, catalog, { livemode: false, accountId: 'acct_1' });
+  assert.equal(result.ok, true);
+  assert.equal(result.periodStart, 1_000);
+  assert.equal(result.periodEnd, 2_000);
+});
+
 for (const [name, override] of [
   ['open session', { status: 'open' }],
   ['unpaid session', { payment_status: 'unpaid' }],
@@ -236,15 +255,16 @@ test('top-up without deterministic account binding fails closed', async () => {
   assert.equal(repo.credits, 0);
 });
 
-test('API key authentication hashes credentials and fails closed', async () => {
-  const raw = 'sg_' + 'a'.repeat(48);
+test('API key authentication hashes credentials and requires an in-period entitlement', async () => {
+  const raw = `sg_${'ab'.repeat(24)}`;
   const digest = await hashApiKey(raw);
   let lookup;
-  const repo = { async findAccountByKeyDigest(value) { lookup = value; return { id: 'acct_1', active: true }; } };
-  assert.equal((await authenticateApiKey(repo, raw)).id, 'acct_1');
-  assert.equal(lookup, digest);
-  await assert.rejects(() => authenticateApiKey(repo, 'bad'), /Invalid API key/);
-  await assert.rejects(() => authenticateApiKey({ async findAccountByKeyDigest() { return { id: 'acct_1', active: 0 }; } }, raw), /Invalid API key/);
+  const repo = { async findAccountByKeyDigest(...value) { lookup = value; return { id: 'acct_1', active: true }; } };
+  assert.equal((await authenticateApiKey(repo, raw, 1_500)).id, 'acct_1');
+  assert.deepEqual(lookup, [digest, 1_500]);
+  await assert.rejects(() => authenticateApiKey(repo, 'bad', 1_500), /Invalid API key/);
+  await assert.rejects(() => authenticateApiKey({ async findAccountByKeyDigest() { return { id: 'acct_1', active: 0 }; } }, raw, 1_500), /Invalid API key/);
+  await assert.rejects(() => authenticateApiKey(repo, raw), /Invalid API key/);
 });
 
 test('generated plaintext API key never appears in structured logs', async () => {
@@ -273,7 +293,7 @@ test('checkout provisioning persists authoritative subscription and event orderi
   assert.equal(command.eventCreated, 1_100);
 });
 
-test('subscription lifecycle maps cancellation and payment failure without resetting usage', async () => {
+test('subscription lifecycle preserves paid access through cancellation period end and disables failed payment', async () => {
   const commands = [];
   const repo = { async applyStripeEventOnce(_id, command) { commands.push(command); return { replayed: false }; } };
   const metadata = { spydergoat_account_id: 'acct_1', spydergoat_sku: 'subscription' };
@@ -283,6 +303,40 @@ test('subscription lifecycle maps cancellation and payment failure without reset
     ['lifecycle', 'past_due', false],
     ['lifecycle', 'canceled', false],
   ]);
+  assert.equal(commands[1].periodEnd, 2_000);
+  assert.equal(commands[1].preserveActiveUntilPeriodEnd, true);
+});
+
+test('subscription lifecycle accepts Stripe item-level billing periods from the live API schema', async () => {
+  const commands = [];
+  const repo = { async applyStripeEventOnce(_id, command) { commands.push(command); return { replayed: false }; } };
+  const metadata = { spydergoat_account_id: 'acct_1', spydergoat_sku: 'subscription' };
+  await processStripeEvent(repo, {
+    id: 'evt_updated_items', created: 1_200, livemode: false, type: 'customer.subscription.updated',
+    data: { object: {
+      id: 'sub_1', customer: 'cus_1', status: 'active', metadata,
+      current_period_start: null, current_period_end: null,
+      items: { data: [{
+        quantity: 1, current_period_start: 1_000, current_period_end: 2_000,
+        price: { id: 'price_pro', product: 'prod_pro' },
+      }] },
+    } },
+  }, catalog, { livemode: false });
+  assert.equal(commands[0].periodStart, 1_000);
+  assert.equal(commands[0].periodEnd, 2_000);
+  assert.equal(commands[0].resetPeriodCalls, true);
+});
+
+test('subscription deletion at the paid period boundary disables entitlement', async () => {
+  let command;
+  const repo = { async applyStripeEventOnce(_id, value) { command = value; return { replayed: false }; } };
+  const metadata = { spydergoat_account_id: 'acct_1', spydergoat_sku: 'subscription' };
+  await processStripeEvent(repo, {
+    id: 'evt_deleted_at_end', created: 2_000, livemode: false, type: 'customer.subscription.deleted',
+    data: { object: { id: 'sub_1', customer: 'cus_1', status: 'canceled', current_period_start: 1_000, current_period_end: 2_000, metadata } },
+  }, catalog, { livemode: false });
+  assert.equal(command.status, 'canceled');
+  assert.equal(command.preserveActiveUntilPeriodEnd, false);
 });
 
 test('lifecycle processing rejects Stripe events from the wrong livemode', async () => {

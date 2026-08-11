@@ -52,7 +52,7 @@ export class D1BillingRepository {
     if (row?.id !== accountId) throw new Error('Checkout account binding is not pending');
   }
 
-  async findAccountByKeyDigest(digest) {
+  async findAccountByKeyDigest(digest, now) {
     return this.db.prepare(`
       SELECT accounts.id, accounts.subscription_status = 'active' AS active
       FROM api_credentials
@@ -60,8 +60,10 @@ export class D1BillingRepository {
       WHERE api_credentials.key_digest = ?1
         AND api_credentials.revoked_at IS NULL
         AND accounts.subscription_status = 'active'
+        AND accounts.period_start IS NOT NULL AND accounts.period_end IS NOT NULL
+        AND ?2 >= accounts.period_start AND ?2 < accounts.period_end
       LIMIT 1
-    `).bind(digest).first();
+    `).bind(digest, now).first();
   }
 
   async consumeAllowance(accountId, now) {
@@ -151,6 +153,7 @@ export class D1BillingRepository {
       statements.push(this.db.prepare(`UPDATE accounts
         SET subscription_status = CASE
               WHEN last_stripe_event_created = ?5 AND last_stripe_event_id <> ?6 THEN 'event_conflict'
+              WHEN ?12 = 1 AND subscription_status = 'active' THEN 'active'
               ELSE ?1
             END,
             current_period_calls = CASE WHEN ?2 = 1 AND ?3 > COALESCE(period_start, -1)
@@ -165,7 +168,8 @@ export class D1BillingRepository {
           AND (?5 > last_stripe_event_created OR (?5 = last_stripe_event_created AND ?6 <> last_stripe_event_id))
           AND EXISTS (SELECT 1 FROM stripe_events WHERE event_id = ?6 AND claim_token = ?11 AND status = 'processing')`)
         .bind(command.status, command.resetPeriodCalls ? 1 : 0, command.periodStart ?? null, command.periodEnd ?? null,
-          eventCreated, eventId, receivedAt, command.accountId, command.customerId, command.subscriptionId, claim));
+          eventCreated, eventId, receivedAt, command.accountId, command.customerId, command.subscriptionId, claim,
+          command.preserveActiveUntilPeriodEnd ? 1 : 0));
     } else {
       throw new Error('Unknown Stripe event command');
     }

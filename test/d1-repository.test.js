@@ -55,14 +55,16 @@ test('D1 allowance consumption fails closed when no atomic row is available', as
   assert.deepEqual(await new D1BillingRepository(db).consumeAllowance('acct_1', 1_500), { allowed: false, reason: 'inactive_outside_period_or_exhausted' });
 });
 
-test('D1 key lookup uses only the credential digest', async () => {
+test('D1 key lookup uses only the digest and requires the active billing period', async () => {
   const log = [];
   const db = { prepare(sql) { return statement(sql, log, { id: 'acct_1', active: 1 }); } };
-  const account = await new D1BillingRepository(db).findAccountByKeyDigest('digest');
+  const account = await new D1BillingRepository(db).findAccountByKeyDigest('digest', 1_500);
   assert.equal(account.id, 'acct_1');
   assert.match(log[0].sql, /api_credentials/i);
   assert.match(log[0].sql, /subscription_status = 'active'/i);
+  assert.match(log[0].sql, /\?2 >= accounts\.period_start AND \?2 < accounts\.period_end/i);
   assert.doesNotMatch(log[0].sql, /plaintext|api_key\s*=/i);
+  assert.deepEqual(log[0].args, ['digest', 1_500]);
 });
 
 test('D1 provisioning atomically stores digest-only credential and encrypted delivery before processing', async () => {
@@ -144,6 +146,7 @@ test('D1 lifecycle mutation is event-claimed and rejects stale event.created sta
   assert.match(sql, /last_stripe_event_created = \?5 AND last_stripe_event_id <> \?6/i);
   assert.match(sql, /subscription_status = CASE/i);
   assert.match(sql, /'event_conflict'/i);
+  assert.match(sql, /WHEN \?12 = 1 AND subscription_status = 'active' THEN 'active'/i);
   assert.match(sql, /stripe_subscription_id = /i);
   assert.match(sql, /EXISTS \(SELECT 1 FROM stripe_events/i);
   assert.doesNotMatch(sql, /wallet_balance\s*=/i);

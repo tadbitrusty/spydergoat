@@ -58,12 +58,38 @@ export async function createProCheckout(repository, stripe, catalog, options = {
   return { accountId, sessionId: session.id, checkoutUrl: session.url };
 }
 
-export async function authenticateApiKey(repository, rawKey) {
+export async function authenticateApiKey(repository, rawKey, now) {
   if (!/^sg_[0-9a-f]{48}$/i.test(String(rawKey || ''))) throw new Error('Invalid API key');
+  if (!Number.isSafeInteger(now) || now < 1) throw new Error('Invalid API key');
   const digest = await hashApiKey(rawKey);
-  const account = await repository.findAccountByKeyDigest(digest);
+  const account = await repository.findAccountByKeyDigest(digest, now);
   if (!account || (account.active !== true && account.active !== 1)) throw new Error('Invalid API key');
   return account;
+}
+
+function priceProductId(price) {
+  return typeof price?.product === 'string' ? price.product : price?.product?.id;
+}
+
+function validPeriod(start, end) {
+  return Number.isSafeInteger(start) && Number.isSafeInteger(end) && end > start;
+}
+
+function subscriptionPeriod(subscription, catalogItem) {
+  const root = validPeriod(subscription?.current_period_start, subscription?.current_period_end)
+    ? { start: subscription.current_period_start, end: subscription.current_period_end }
+    : null;
+  const data = Array.isArray(subscription?.items?.data) ? subscription.items.data : [];
+  if (data.length === 0) return root;
+  const matches = data.filter(entry => (
+    entry?.quantity === 1
+    && entry?.price?.id === catalogItem?.price
+    && priceProductId(entry?.price) === catalogItem?.product
+  ));
+  if (matches.length !== 1 || !validPeriod(matches[0].current_period_start, matches[0].current_period_end)) return null;
+  const item = { start: matches[0].current_period_start, end: matches[0].current_period_end };
+  if (root && (root.start !== item.start || root.end !== item.end)) return null;
+  return root || item;
 }
 
 export function validateCheckoutSession(session, catalog, expected = {}) {
@@ -74,7 +100,8 @@ export function validateCheckoutSession(session, catalog, expected = {}) {
   const accountId = session?.metadata?.spydergoat_account_id;
   const subscription = session?.subscription;
   const subscriptionId = typeof subscription === 'string' ? subscription : subscription?.id;
-  const productId = typeof price?.product === 'string' ? price.product : price?.product?.id;
+  const productId = priceProductId(price);
+  const period = subscriptionPeriod(subscription, item);
   const checks = [
     session?.status === 'complete',
     session?.payment_status === 'paid',
@@ -99,14 +126,12 @@ export function validateCheckoutSession(session, catalog, expected = {}) {
     subscription?.status === 'active',
     subscription?.metadata?.spydergoat_account_id === accountId,
     subscription?.metadata?.spydergoat_sku === sku,
-    Number.isSafeInteger(subscription?.current_period_start),
-    Number.isSafeInteger(subscription?.current_period_end),
-    subscription?.current_period_end > subscription?.current_period_start,
+    Boolean(period),
   ];
   return checks.every(Boolean)
     ? {
       ok: true, sku, accountId, customerId: session.customer, item, subscriptionId,
-      periodStart: subscription.current_period_start, periodEnd: subscription.current_period_end,
+      periodStart: period.start, periodEnd: period.end,
     }
     : { ok: false, error: 'Checkout session failed closed validation' };
 }
@@ -124,7 +149,7 @@ function id(value) {
   return typeof value === 'string' ? value : value?.id;
 }
 
-function lifecycleCommand(event) {
+function lifecycleCommand(event, catalog) {
   const object = event.data?.object;
   const eventCreated = requiredEventCreated(event);
   let metadata;
@@ -135,6 +160,7 @@ function lifecycleCommand(event) {
   let periodStart;
   let periodEnd;
   let resetPeriodCalls = false;
+  let preserveActiveUntilPeriodEnd = false;
 
   if (event.type.startsWith('customer.subscription.')) {
     metadata = object?.metadata;
@@ -142,10 +168,15 @@ function lifecycleCommand(event) {
     subscriptionId = object?.id;
     customerId = id(object?.customer);
     status = object?.status;
-    periodStart = object?.current_period_start;
-    periodEnd = object?.current_period_end;
+    const period = subscriptionPeriod(object, catalog?.[metadata?.spydergoat_sku]);
+    periodStart = period?.start;
+    periodEnd = period?.end;
     if (event.type === 'customer.subscription.deleted') {
       if (status !== 'canceled') throw new Error('Deleted subscription is not canceled');
+      if (!Number.isSafeInteger(periodStart) || !Number.isSafeInteger(periodEnd) || periodEnd <= periodStart) {
+        throw new Error('Stripe subscription period is invalid');
+      }
+      preserveActiveUntilPeriodEnd = eventCreated < periodEnd;
       resetPeriodCalls = false;
     } else {
       const allowed = new Set(['active', 'trialing', 'past_due', 'unpaid', 'canceled', 'paused', 'incomplete', 'incomplete_expired']);
@@ -185,7 +216,7 @@ function lifecycleCommand(event) {
 
   return {
     kind: 'lifecycle', type: event.type, accountId, customerId, subscriptionId, status,
-    eventCreated, periodStart, periodEnd, resetPeriodCalls,
+    eventCreated, periodStart, periodEnd, resetPeriodCalls, preserveActiveUntilPeriodEnd,
   };
 }
 
@@ -202,7 +233,7 @@ export async function processStripeEvent(repository, event, catalog, options = {
   const eventCreated = requiredEventCreated(event);
 
   if (event.type !== 'checkout.session.completed') {
-    const command = lifecycleCommand(event);
+    const command = lifecycleCommand(event, catalog);
     if (repository.hasLifecycleAuthority && !await repository.hasLifecycleAuthority(command)) {
       throw new Error('Stripe lifecycle account authority was not established');
     }
