@@ -6,6 +6,26 @@ function statement(sql, log, result) {
   return { bind(...args) { log.push({ sql, args }); return { async first() { return result; }, async run() { return { success: true, meta: { changes: result ? 1 : 0 } }; } }; } };
 }
 
+test('D1 pending account creation inserts an inactive account without Stripe authority', async () => {
+  const log = [];
+  const db = { prepare(sql) { return statement(sql, log, { id: 'acct_1' }); } };
+  await new D1BillingRepository(db).createPendingAccount('acct_1');
+  assert.match(log[0].sql, /INSERT INTO accounts/i);
+  assert.match(log[0].sql, /subscription_status/i);
+  assert.deepEqual(log[0].args, ['acct_1']);
+  assert.doesNotMatch(log[0].sql, /'active'/i);
+});
+
+test('D1 checkout failure only transitions the matching pending account', async () => {
+  const log = [];
+  const db = { prepare(sql) { return statement(sql, log, { id: 'acct_1' }); } };
+  await new D1BillingRepository(db).markCheckoutFailed('acct_1');
+  assert.match(log[0].sql, /UPDATE accounts/i);
+  assert.match(log[0].sql, /subscription_status = 'checkout_failed'/i);
+  assert.match(log[0].sql, /subscription_status = 'pending'/i);
+  assert.deepEqual(log[0].args, ['acct_1']);
+});
+
 test('D1 allowance consumption is one conditional UPDATE with RETURNING', async () => {
   const log = [];
   const db = { prepare(sql) { return statement(sql, log, { current_period_calls: 5001, wallet_balance: 0 }); } };

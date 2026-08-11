@@ -1,317 +1,127 @@
-# Spydergoat - Real-Time Atomic Modified Julian Clock
+# SpyderGoat v1.1+ Build and Hardening Plan
 
-> **Historical concept document — superseded for v1.1.** This January 2026 plan records the original product hypothesis, not the current runtime or release contract. SpyderGoat v1.1 uses the Cloudflare Worker clock and does **not** claim NIST/GPS synchronization, atomic-clock accuracy, signed receipts, or a measured uptime SLA. Use `README.md` and `docs/v1.1-release-candidate-2026-08-10.md` for current behavior and release posture.
+**Status:** Active source of truth
+**Authority decision:** 2026-08-11, Adam
+**Current branch:** `feature/paid-access-v1`
 
-**Domain:** spydergoat.com (owned, Cloudflare, locked 10 years through 2036)
-**Tagline:** "One number. Always right. Solve temporal drift."
+## Authority law
 
----
+The authoritative product starts with the React v1.1 refactor and everything deliberately hardened after it. Pre-refactor v1 concepts are historical input only. They do not define current APIs, guarantees, billing behavior, release readiness, or implementation sequence.
 
-## The Problem (Documented Proof)
+Authority order:
 
-AI systems cannot reliably tell time. Tested December 2024 against production Claude:
+1. Current code, tests, migrations, and configuration on the active branch.
+2. This active build plan.
+3. `docs/plans/2026-08-10-paid-access-rebuild.md` for the paid-access implementation sequence.
+4. `docs/current-hardening-handoff.md` for live local state and receipts.
+5. `docs/v1.1-release-candidate-2026-08-10.md` for the tagged v1.1 candidate receipt.
+6. Archived and superseded documents for history only.
 
-**Failure Modes Identified:**
-1. No instinct to ground temporally
-2. No self-correction after temporal errors
-3. Web search results are cached/stale
-4. Authoritative time sources use client-side JS (unscrapable)
-5. Some URLs error out silently
-6. Even server-rendered times can be ~2 hours stale
+When documents disagree, current tested behavior wins temporarily and the active documents must be corrected in the same local slice.
 
-**The Gap:** Every AI provider (Anthropic, OpenAI, Google) has this problem. None have solved it natively. All can convert Julian - it's basic math. None have a reliable source to fetch from.
+## Current product truth
 
-**The Solution:** NTP for AI. A canonical time source that returns one number, always accurate, always available.
+SpyderGoat is a Cloudflare Worker time API with a React 19, TypeScript, and Vite product surface.
 
----
+- `/mjd` returns MJD, UTC ISO time, Unix seconds, and `source: "server"`.
+- `/jd` returns the same receipt plus Julian Date.
+- Values come from the Cloudflare Worker runtime clock.
+- SpyderGoat does not claim NIST/GPS synchronization, atomic-clock accuracy, signed timestamps, monotonic time, or a measured uptime SLA.
+- The HTML shell receives a fresh Worker-generated bootstrap before React mounts.
+- A direct Vite/browser fallback is visibly labeled browser-derived.
+- Time responses use `Cache-Control: no-store`.
+- Free GET requests share one best-effort per-IP KV bucket: one successful call per 30 minutes across `/mjd` and `/jd`.
+- API `HEAD` requests are quota-neutral.
+- KV is abuse control, not transactional accounting.
 
-## Product Definition
+## Current release posture
 
-### What It Is
-- Single-page website with MJD ticker
-- JSON API endpoint
-- Synced to atomic clock source (NIST/GPS)
-- Server-rendered (no JS required for scraping)
-- Absurd goat in sunglasses in hero section
+### Free v1.1 surface
 
-### What It Is NOT
-- Pretty UI beyond the basics
-- User accounts (at MVP)
-- Analytics dashboards
-- Timezone pickers
-- World clock displays
-- Any feature that doesn't solve temporal drift
+The v1.1 release line is the stable product baseline. The v1.1 candidate receipt records its local tests, checks, build, audits, dry-run, and browser inspection. The later v1.1.1 logo correction is covered by automated regression tests in the current tree but does not have a separate repository-resident browser receipt.
 
----
+### Paid access
 
-## Technical Spec
+Paid access remains **NO-GO** and disabled by default.
 
-### Format Decision: MJD (Modified Julian Date)
-- MJD = JD - 2,400,000.5
-- Midnight epoch (intuitive)
-- Smaller number: `61031.37` instead of `2461031.87`
-- Adopted by IAU in 1973
-- Used by NASA, ESA, telecom standards, GPS
+The active local branch is implementing the Pro-first architecture behind explicit capability and origin gates. The current dirty slice adds a server-generated pending account, exact Stripe Price preflight, and allowlisted Stripe Checkout command for `POST /checkout/pro`, but this is local candidate work—not a live or released customer capability.
 
-### API Endpoints
+Still required before accepting money:
 
-```
-GET /              → HTML page with ticker
-GET /mjd           → JSON: { "mjd": 61031.87452, "timestamp": "2026-01-24T..." }
-GET /jd            → JSON: { "jd": 2461031.87452 }  (optional, standard Julian)
-GET /tz/{zone}     → JSON: { "timezone": "EST", "time": "14:30:00", "mjd": ... }
-```
+1. Review and complete the versioned D1 migration and reconciliation posture.
+2. Complete idempotent API-key issuance with digest-only authority.
+3. Implement encrypted, expiring, one-time key delivery.
+4. Wire and verify signed Stripe webhooks.
+5. Implement renewal/reset, payment-failure, cancellation, and out-of-order event semantics.
+6. Prove the 5,000-call billing-period boundary transactionally.
+7. Wire bearer authentication and paid allowance consumption.
+8. Rehearse the complete flow against disposable local D1.
+9. Perform separately authorized Stripe test-mode rehearsal.
+10. Perform separately authorized production-dark setup before enabling checkout.
+11. Obtain explicit authorization before accepting real payment.
 
-### Response Format
-```json
-{
-  "mjd": 61031.87452,
-  "jd": 2461031.87452,
-  "utc": "2026-01-24T20:59:18.528Z",
-  "unix": 1737752358,
-  "source": "NIST",
-  "accuracy": "±0.001s"
-}
-```
+Wallet top-ups and paid overages remain parked until Pro survives real use.
 
-### Integration Example
-```python
-import requests
+## Product contract
 
-mjd = requests.get('https://spydergoat.com/mjd').json()['mjd']
-# done. you have the time.
-```
+### Free
 
----
+- Price: $0.
+- Signup: none.
+- Limit: one successful GET per IP every 30 minutes across `/mjd` and `/jd`.
+- Enforcement: best-effort Cloudflare KV.
 
-## Architecture
+### Intended Pro
 
-### Infrastructure
-```
-[NIST/GPS Atomic Source] → [Spydergoat Server] → [REST/Scrape] → [AI Systems]
-```
+- Price: $4.89/month.
+- Included usage: 5,000 successful authenticated requests per proven Stripe billing period.
+- Initial account: one active key.
+- Lost-key posture: no plaintext recovery; manual verified replacement is the phase-one target.
+- Cancellation target: access continues through the paid entitlement period, then disables.
+- Current availability: paused.
 
-### Hosting: Cloudflare Workers
-- Free tier: 100k requests/day
-- Paid tier ($5/mo): 10M requests/month
-- No cold starts
-- Global edge deployment
-- Already using Cloudflare for DNS
+### Wallet
 
-### Data Persistence (for billing)
-- Cloudflare KV (free tier available) OR
-- Supabase (you already have one) OR
-- Simple SQLite on Hetzner
+- Intended price: $0.001/request.
+- Current availability: deliberately parked and disabled.
 
-### Atomic Time Sync
-- Primary: NIST time servers
-- Sync interval: Every minute or on-demand
-- Display verification: "Synchronized to NIST atomic clock"
+## Hardening rules
 
----
+- Fail closed when payment, identity, entitlement, D1 state, signature verification, catalog identity, or delivery cannot be proven.
+- Never store or log plaintext API keys as authority.
+- The browser cannot choose product IDs, prices, account status, allowance, or entitlement.
+- Every Stripe mutation must be bound to one server-generated internal account ID.
+- Every event mutation must be idempotent and safe under duplicate or reordered delivery.
+- Free and paid quota paths remain separate.
+- No product copy may imply atomic time, cryptographic attestation, or an accuracy/uptime guarantee.
+- Incomplete paid behavior must remain visibly and operationally unavailable.
+- Local verification is not production proof.
 
-## Billing Model (Final from this conversation)
+## Verification gate for each local slice
 
-### Tiers
+Run and record:
 
-| Tier | Price | Calls | Rate Limit |
-|------|-------|-------|------------|
-| Free | $0 | Unlimited | 1 per 30 min |
-| Paid | $4.89/mo | 5,000/mo | None |
-| Overage | $0.001/call | From wallet | None |
-
-### How It Works
-1. **$4.89/month subscription** - covers first 5k calls, no rate limit
-2. **Wallet** - prepaid balance for overages at $0.001/call
-3. **Wallet empty** - drops to 1 call per 30 min ("make engineering yell at accounting" tier)
-
-### Key Design Decisions
-- No invoicing - Stripe collects, deposits weekly
-- No refunds - wallet balance carries forward
-- Usage tracking is THEIR problem (another API call if they want logs)
-- No monthly reconciliation, no billing complexity
-
-### Payment Flow
-```
-User tops up wallet → Stripe deposits to you weekly
-Monthly: charge $4.89, reset 5k allowance
-Over 5k: decrement wallet at $0.001/call
-Wallet = $0: throttle to 1/30min until top-up or next month
+```bash
+npm test
+npm run check
+npm run build
+npm audit
+npm audit --omit=dev
+npx wrangler deploy --dry-run
+git diff --check
+git status --short --branch --untracked-files=all
 ```
 
-### Data Model
-```sql
-users:
-  - user_id
-  - stripe_customer_id
-  - wallet_balance
-  - current_period_calls
-  - period_start
-  - api_key
-```
+Also run focused tests first for behavior changes and inspect the final diff/status. Browser-facing changes require desktop and 390 × 844 inspection with console and overflow checks.
 
----
+## Publication stop-line
 
-## Billing Infrastructure
+Local source/docs/tests may be hardened under Adam’s current directive. Commit, push, merge, deploy, D1 migration, Worker secret changes, Stripe API/Dashboard actions, DNS changes, publication, customer-data access, and accepting payment remain separate authorization classes.
 
-### Components
-1. **Cloudflare Workers** - handles auth, rate limiting, call counting
-2. **Stripe** - subscriptions + usage-based billing
-3. **Cloudflare KV or Supabase** - wallet balances, usage counts
+## Historical material
 
-### Gateway Logic
-```
-if wallet > 0:
-    charge wallet, allow call
-elif calls_this_period < 5000:
-    allow call
-else:
-    if last_call > 30_min_ago:
-        allow call
-    else:
-        reject with "try again in X minutes"
-```
+- Original January v1 concept: `docs/archive/BUILD_PLAN-v1-concept-2026-01-24.md`
+- Original plaintext schema sketch: `docs/archive/schema-v1-plaintext-legacy.sql`
+- Early hardening snapshot: `docs/overnight-hardening-handoff-2026-08-10.md`
 
----
-
-## Frontend Spec
-
-### Hero Section
-- Absurd goat in sunglasses (brand identity)
-- Pleasing color background
-- MJD ticker in a box, updating real-time
-- Clean, minimal, weird
-
-### Single Page Layout
-```
-[HERO: Goat + Ticker]
-
-[API Documentation]
-- One endpoint
-- One code example
-- That's it
-
-[Pricing]
-- Free: 1/30min
-- $4.89/mo: 5k calls
-- Overage: $0.001/call
-
-[Sign Up / Get API Key]
-
-[Footer: GitHub link, Stripe badge]
-```
-
----
-
-## Build Phases
-
-### Phase 1: Core (MVP)
-- [ ] Cloudflare Worker: returns MJD synced to atomic source
-- [ ] HTML page with ticker (server-rendered)
-- [ ] JSON endpoint: /mjd
-- [ ] Deploy to spydergoat.com
-- [ ] GitHub repo (open source core)
-
-### Phase 2: Billing
-- [ ] Stripe integration (subscription + wallet top-ups)
-- [ ] API key generation
-- [ ] Rate limiting logic
-- [ ] Cloudflare KV for user state
-
-### Phase 3: Polish
-- [ ] Goat hero graphic
-- [ ] Documentation page
-- [ ] Usage dashboard (minimal - just balance/calls remaining)
-
----
-
-## File Structure
-
-```
-spydergoat/
-├── BUILD_PLAN.md          # This file
-├── README.md              # Public-facing, why this exists
-├── docs/
-│   ├── PROBLEM.md         # The temporal drift documentation
-│   └── API.md             # Endpoint documentation
-├── src/
-│   ├── api/
-│   │   ├── worker.js      # Cloudflare Worker (main logic)
-│   │   └── auth.js        # API key validation
-│   └── frontend/
-│       └── index.html     # Single page app
-├── assets/
-│   └── goat.svg           # The absurd goat
-└── wrangler.toml          # Cloudflare config
-```
-
----
-
-## Operating Costs (Estimated)
-
-| Item | Cost |
-|------|------|
-| Domain | $10.46/yr (prepaid 10 years) |
-| Cloudflare Workers Paid | $5/mo |
-| Stripe fees | 2.9% + $0.30 per transaction |
-| **Total before revenue** | ~$5/mo |
-
-Breakeven: 2 paying customers at $4.89/mo
-
----
-
-## Revenue Projections
-
-| Users | Monthly Revenue |
-|-------|-----------------|
-| 10 | $48.90 |
-| 100 | $489 |
-| 1000 | $4,890 |
-| + overage | Variable |
-
-At scale, this is passive income. Build once, maintain rarely.
-
----
-
-## The Brand
-
-**Spydergoat** = 
-1. Transgenic bioengineered goats producing spider silk (real science)
-2. GOAT = God of All Time (not greatest)
-3. Spyder = web crawler, network, weaving connections
-4. Google spider crawlers indexing the web
-
-The name has layers. The more someone digs, the more they find.
-
----
-
-## Origin Story
-
-Discovered accidentally during a temporal grounding test, December 2024. Documented four distinct failure modes against a production AI system in five minutes. The conversation proving the problem IS the documentation.
-
----
-
-## Success Criteria
-
-1. API returns accurate MJD within ±1 second
-2. 99.9% uptime
-3. Build once, never touch (except security updates)
-4. Passive income covering hosting + profit
-
----
-
-## Next Actions
-
-1. [ ] Create Cloudflare Worker skeleton
-2. [ ] Implement atomic time sync
-3. [ ] Design goat graphic
-4. [ ] Set up Stripe
-5. [ ] Write README
-6. [ ] Deploy MVP
-7. [ ] Announce on GitHub
-
----
-
-*"One number. Always right. Solve temporal drift."*
-
-*Last updated: 2026-01-24 by Adam, Head of IT / Circuit Magician*
+Historical files explain where the idea came from. They are not implementation instructions.

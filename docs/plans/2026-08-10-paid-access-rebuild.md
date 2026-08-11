@@ -1,6 +1,8 @@
 # SpyderGoat Paid Access Rebuild Plan
 
-> **Status:** Planning only. No Stripe calls, D1 migrations, secret changes, payment links, customer emails, pushes, or deployments are authorized by this document.
+> **Status:** Active controlled implementation plan. Tasks may proceed locally under Adam’s v1.1 hardening directive, but no Stripe vendor calls, D1 migrations, secret changes, payment links, customer emails, pushes, or deployments are authorized by this document.
+>
+> **Authority:** The React v1.1 refactor and subsequent hardening are current truth. `BUILD_PLAN.md` governs product/runtime claims; this document governs the paid-access sequence.
 
 **Goal:** Launch a safe Pro subscription that issues one API key, enforces a 5,000-request monthly allowance, and fails closed whenever identity, payment, accounting, or delivery cannot be proven.
 
@@ -61,18 +63,21 @@ Wallet stays paused until the simpler subscription lifecycle is proven. The exis
   - Bearer API requests → `503 paid_access_paused`.
   - No payment links/buttons are rendered.
 
+### Current execution checkpoint — local only
+
+Task 2 is locally implemented and awaiting final packaging review on `feature/paid-access-v1`: the dirty candidate adds a capability-gated `POST /checkout/pro`, server-generated pending account identity, exact-Origin allowlisting, unexpected-body rejection, exact Stripe Price preflight, explicit failed-checkout account state, and a constrained Stripe Checkout client. This work is not committed, released, or enabled.
+
 ### Missing before money can move
 
-1. No account-creation/checkout-session route.
-2. No server-generated deterministic account identity before Checkout.
-3. No API-key generation and credential insertion in the real D1 repository.
-4. No encrypted one-time key-delivery implementation.
-5. No live Worker webhook integration.
-6. No renewal/reset, cancellation, or failed-payment event handling.
-7. No verified period-boundary behavior for the 5,000-call allowance.
-8. No local D1 migration rehearsal receipt.
-9. No Stripe test-mode catalog/webhook rehearsal.
-10. No production migration, secrets, products/prices, or guarded enable flag.
+1. Complete independent review and packaging of the pending-account/Checkout slice.
+2. No API-key generation and credential insertion in the real D1 repository.
+3. No encrypted one-time key-delivery implementation.
+4. No live Worker webhook integration.
+5. No renewal/reset, cancellation, or failed-payment event handling.
+6. No verified period-boundary behavior for the 5,000-call allowance.
+7. No local D1 migration rehearsal receipt.
+8. No Stripe test-mode catalog/webhook rehearsal.
+9. No production migration, secrets, products/prices, or guarded enable flag.
 
 **Current launch posture:** Paid launch remains **NO-GO**, correctly and intentionally.
 

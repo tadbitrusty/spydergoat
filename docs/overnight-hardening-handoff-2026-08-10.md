@@ -1,6 +1,6 @@
 # Spydergoat Local Hardening Handoff — 2026-08-10
 
-> **Superseded snapshot.** This receipt predates the React v1.1 Static Assets bundle and its final test count. Preserve it as hardening history; use `v1.1-release-candidate-2026-08-10.md` for the current local candidate.
+> **Superseded snapshot.** This receipt predates the React v1.1 Static Assets bundle and its final test count. Preserve it as hardening history; use `current-hardening-handoff.md` for current local state and `v1.1-release-candidate-2026-08-10.md` for the tagged v1.1 candidate receipt.
 
 ## Verdict
 

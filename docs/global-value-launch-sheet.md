@@ -1,148 +1,100 @@
-# SpyderGoat Global Value Launch Sheet
+# SpyderGoat v1.1 Global Value and Launch Sheet
 
-Date: 2026-06-24 / 2026-06-25 overnight sprint
+**Status:** Current positioning guide; public launch still requires explicit approval.
+**Authority:** React v1.1 refactor and subsequent hardening.
 
-## Core read
+## Product sentence
 
-Adam's instinct is right: time has global value because software, agents, ledgers, audits, satellites, simulations, and workflows all need shared temporal truth.
+**External server-time receipts for software. One API call.**
 
-The fast product sentence is not just:
+SpyderGoat provides a compact HTTP observation of the Cloudflare Worker clock as UTC, Unix time, MJD, and optionally JD.
 
-"Accurate time for anything."
+It is not NTP, an atomic-clock feed, a signed timestamp authority, a monotonic clock, or an accuracy/uptime SLA.
 
-It is:
+## Why it has global value
 
-"Trusted time for software that needs receipts."
+Software, agents, logs, audits, simulations, and scientific tools need a shared time representation. SpyderGoat’s useful wedge is small and boring:
 
-## Positioning
+- one external server-clock observation;
+- one timezone-independent numeric representation;
+- one inspectable JSON response;
+- no SDK or account required for the free endpoint.
 
-SpyderGoat is a tiny external time anchor for:
+## First audiences
 
-- AI agents that need live temporal context;
-- autonomous tool runs that need receipts;
-- audit logs and webhooks;
-- scientific/satellite/simulation time math;
-- distributed systems avoiding timezone/local-clock weirdness.
+### AI-agent builders
 
-## Why this can travel globally
+“Give your agent an external server-time observation: UTC, Unix, MJD, or JD.”
 
-- Time is universal infrastructure.
-- MJD/JD are niche but real scientific/technical formats.
-- AI-agent builders need external truth anchors.
-- The endpoint is simple enough for any language.
-- The free tier creates immediate proof.
-- Paid tier is impulse-priced for developers.
+### DevOps and audit-log builders
 
-## First wedge audiences
+“Add a small external timestamp reference to jobs, webhooks, and event records.”
 
-### 1. AI agent builders
+### Astronomy and science tooling
 
-Pain:
+“MJD/JD over HTTP, with the time-source and time-scale caveats stated plainly.”
 
-"My agent does not know what time it is and I need timestamped decisions/tool logs."
+### API directories and developer testing
 
-Message:
+“A tiny public time API with a no-signup free path.”
 
-"Give your agent a tiny external clock receipt: UTC, Unix, MJD, JD. One call."
+## Current product ladder
 
-### 2. DevOps / webhook / audit-log builders
+### Free — available in the product design
 
-Pain:
-
-"I want event receipts that do not depend only on the app server's local clock."
-
-Message:
-
-"Add an external edge timestamp receipt to jobs, webhooks, and audit trails."
-
-### 3. Astronomy / satellite / science hackers
-
-Pain:
-
-"I need MJD/JD without calendar/timezone nonsense."
-
-Message:
-
-"MJD/JD over HTTP. Tiny, boring, useful."
-
-### 4. Developer toy / API directories
-
-Pain:
-
-"I want a simple useful API to test with."
-
-Message:
-
-"NTP-ish timestamp API with MJD/JD and free use."
-
-## Product ladder
-
-### Free
-
+- $0;
 - no signup;
-- 1 request / 30 min;
-- useful for testing and demos.
+- one successful GET per IP every 30 minutes, shared across `/mjd` and `/jd`;
+- API `HEAD` requests do not consume quota;
+- KV enforcement is best-effort abuse control.
 
-### Pro
+### Pro — intended, currently paused
 
-- $4.89/mo;
-- 5,000 requests/month;
-- API key;
-- no free-tier wait.
+- $4.89/month;
+- 5,000 authenticated calls per proven billing period;
+- one initial API key;
+- no free-tier wait;
+- not launchable until checkout, webhook, entitlement, key delivery, cancellation, renewal, and allowance boundaries are proven.
 
-### Wallet
+### Wallet — parked
 
-- $0.001/request;
-- prepaid;
-- no expiration.
+- intended price: $0.001/request;
+- no top-ups or wallet links exposed;
+- activation waits until Pro survives real use.
 
-### Future higher-value layer
+## Current interface
 
-Do not build yet, but possible:
+The React v1.1 product surface includes:
+
+- MJD instrument panel;
+- explicit server/browser provenance labels;
+- epoch ruler;
+- Why MJD and use-case sections;
+- runtime facts;
+- public API example;
+- free-available and paid-paused access states;
+- original SpyderGoat brand mark;
+- mobile and reduced-motion behavior.
+
+It does not contain the earlier proposed “Time Is Infrastructure” section, account dashboard, wallet UI, SDK collection, or public payment controls.
+
+## Future value, not current claims
+
+Possible later layers:
 
 - signed timestamp receipts;
 - batch receipts;
-- uptime/status receipts;
-- agent SDK snippets;
-- MCP tool / Hermes plugin;
-- audit bundle for regulated workflows;
-- teams/organization API keys.
+- status/uptime evidence;
+- SDKs and an MCP/Hermes integration;
+- regulated audit bundles;
+- team keys and account administration.
 
-## Build changes made in this slice
+None of these may be advertised as shipped before implementation and verification.
 
-- Repositioned landing-page hero copy around agents, audits, satellites, ledgers, and systems that need timestamp receipts.
-- Added "Time Is Infrastructure" value section.
-- Added use-case cards: AI agents, audit trails, scientific systems, global software.
-- Fixed API example copy.
-- Rewrote README around the global value wedge.
+## Launch law
 
-## Do not build yet
+Do not post, publish, deploy, enable checkout, or describe paid access as available without Adam’s explicit approval and a current release receipt.
 
-- signed receipts;
-- accounts dashboard;
-- SDKs in five languages;
-- enterprise pricing;
-- public launch blast;
-- live deploy;
-- Stripe changes.
+Current safe public wording:
 
-Those come after we verify current live billing/provisioning and decide the launch surface.
-
-## Next safe technical action
-
-Run local Worker preview and inspect the rendered page:
-
-```bash
-cd /home/adam/Desktop/spydergoat/spydergoat
-npm run dev
-```
-
-Then open the local wrangler URL.
-
-## Next business action
-
-Create a tiny launch post aimed at AI-agent builders:
-
-"AI agents hallucinate time. SpyderGoat gives them a tiny external clock receipt: UTC, Unix, MJD, JD. Free endpoint, one call."
-
-Do not post until Adam explicitly approves the channel/message.
+> SpyderGoat gives software a compact external server-time observation as UTC, Unix time, MJD, or JD. The free endpoint requires no signup. Paid access is paused while billing and key delivery are hardened.

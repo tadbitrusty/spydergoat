@@ -4,6 +4,24 @@ export class D1BillingRepository {
     this.db = db;
   }
 
+  async createPendingAccount(accountId) {
+    const result = await this.db.prepare(`
+      INSERT INTO accounts (id, subscription_status, created_at, updated_at)
+      VALUES (?1, 'pending', unixepoch(), unixepoch())
+      ON CONFLICT(id) DO NOTHING
+    `).bind(accountId).run();
+    if (!result?.success) throw new Error('Pending billing account was not created');
+  }
+
+  async markCheckoutFailed(accountId) {
+    const result = await this.db.prepare(`
+      UPDATE accounts
+      SET subscription_status = 'checkout_failed', updated_at = unixepoch()
+      WHERE id = ?1 AND subscription_status = 'pending'
+    `).bind(accountId).run();
+    if (!result?.success) throw new Error('Pending billing account failure was not recorded');
+  }
+
   async findAccountByKeyDigest(digest) {
     return this.db.prepare(`
       SELECT accounts.id, accounts.subscription_status = 'active' AS active

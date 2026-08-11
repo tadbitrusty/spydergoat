@@ -8,6 +8,45 @@ export async function hashApiKey(rawKey) {
   return hex(new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(rawKey))));
 }
 
+export async function createProCheckout(repository, stripe, catalog, options = {}) {
+  const item = catalog?.subscription;
+  if (
+    item?.mode !== 'subscription'
+    || !String(item?.price || '').startsWith('price_')
+    || !String(item?.product || '').startsWith('prod_')
+    || item?.currency !== 'usd'
+    || item?.amount !== 489
+  ) {
+    throw new Error('Pro checkout is not configured');
+  }
+  if (!options.successUrl || !options.cancelUrl) throw new Error('Pro checkout return URLs are not configured');
+
+  const generateAccountId = options.generateAccountId || (() => `acct_${crypto.randomUUID()}`);
+  const accountId = String(generateAccountId());
+  if (!/^acct_[0-9a-z-]+$/i.test(accountId)) throw new Error('Invalid generated account ID');
+
+  await repository.createPendingAccount(accountId);
+  let session;
+  try {
+    session = await stripe.createCheckoutSession({
+      accountId,
+      sku: 'subscription',
+      mode: item.mode,
+      priceId: item.price,
+      productId: item.product,
+      currency: item.currency,
+      amount: item.amount,
+      successUrl: options.successUrl,
+      cancelUrl: options.cancelUrl,
+    });
+  } catch (error) {
+    await repository.markCheckoutFailed(accountId);
+    throw error;
+  }
+  if (!session?.id || !session?.url) throw new Error('Stripe checkout session was not created');
+  return { accountId, sessionId: session.id, checkoutUrl: session.url };
+}
+
 export async function authenticateApiKey(repository, rawKey) {
   if (!/^sg_[0-9a-f]{48}$/i.test(String(rawKey || ''))) throw new Error('Invalid API key');
   const digest = await hashApiKey(rawKey);

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   authenticateApiKey,
   consumePaidRequest,
+  createProCheckout,
   hashApiKey,
   processStripeEvent,
   validateCheckoutSession,
@@ -22,6 +23,76 @@ function validSession(overrides = {}) {
     ...overrides,
   };
 }
+
+test('Pro checkout creates the bound pending account before contacting Stripe', async () => {
+  const order = [];
+  const repository = {
+    async createPendingAccount(accountId) {
+      order.push(['account', accountId]);
+    },
+  };
+  const stripe = {
+    async createCheckoutSession(command) {
+      order.push(['stripe', command]);
+      return { id: 'cs_test_1', url: 'https://checkout.stripe.com/c/pay/cs_test_1' };
+    },
+  };
+
+  const result = await createProCheckout(repository, stripe, catalog, {
+    generateAccountId: () => 'acct_fixed',
+    successUrl: 'https://spydergoat.test/success?session_id={CHECKOUT_SESSION_ID}',
+    cancelUrl: 'https://spydergoat.test/#pricing',
+  });
+
+  assert.equal(result.accountId, 'acct_fixed');
+  assert.equal(result.checkoutUrl, 'https://checkout.stripe.com/c/pay/cs_test_1');
+  assert.deepEqual(order[0], ['account', 'acct_fixed']);
+  assert.equal(order[1][0], 'stripe');
+  assert.deepEqual(order[1][1], {
+    accountId: 'acct_fixed',
+    sku: 'subscription',
+    mode: 'subscription',
+    priceId: 'price_pro',
+    productId: 'prod_pro',
+    currency: 'usd',
+    amount: 489,
+    successUrl: 'https://spydergoat.test/success?session_id={CHECKOUT_SESSION_ID}',
+    cancelUrl: 'https://spydergoat.test/#pricing',
+  });
+});
+
+test('Pro checkout marks the pending account failed when Stripe cannot create a session', async () => {
+  const states = [];
+  const repository = {
+    async createPendingAccount(accountId) { states.push(['pending', accountId]); },
+    async markCheckoutFailed(accountId) { states.push(['failed', accountId]); },
+  };
+  const stripe = { async createCheckoutSession() { throw new Error('Stripe unavailable'); } };
+
+  await assert.rejects(
+    () => createProCheckout(repository, stripe, catalog, {
+      generateAccountId: () => 'acct_fixed',
+      successUrl: 'https://spydergoat.test/success',
+      cancelUrl: 'https://spydergoat.test/#pricing',
+    }),
+    /Stripe unavailable/,
+  );
+  assert.deepEqual(states, [['pending', 'acct_fixed'], ['failed', 'acct_fixed']]);
+});
+
+test('Pro checkout fails closed before account creation when catalog is unavailable', async () => {
+  let touched = false;
+  const repository = { async createPendingAccount() { touched = true; } };
+  await assert.rejects(
+    () => createProCheckout(repository, {}, {}, {
+      generateAccountId: () => 'acct_fixed',
+      successUrl: 'https://spydergoat.test/success',
+      cancelUrl: 'https://spydergoat.test/#pricing',
+    }),
+    /Pro checkout is not configured/i,
+  );
+  assert.equal(touched, false);
+});
 
 test('checkout validation accepts only the allowlisted paid completed session', () => {
   const result = validateCheckoutSession(validSession(), catalog, { livemode: false, accountId: 'acct_1' });

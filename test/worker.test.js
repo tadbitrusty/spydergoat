@@ -114,6 +114,118 @@ test('webhook fails closed when transactional billing is not configured', async 
   assert.equal(response.status, 503);
 });
 
+test('Pro checkout remains unavailable unless the paid capability is explicitly enabled', async () => {
+  let calls = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => { calls++; throw new Error('network forbidden'); };
+  try {
+    const response = await request('/checkout/pro', {
+      method: 'POST',
+      headers: { Origin: 'https://spydergoat.test' },
+    });
+    assert.equal(response.status, 503);
+    assert.equal(calls, 0);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('Pro checkout rejects unexpected request bodies before D1 or Stripe', async () => {
+  let touched = false;
+  const bindings = {
+    ...env(),
+    PAID_ACCESS_ENABLED: 'true',
+    CHECKOUT_ORIGINS: 'https://spydergoat.test',
+    STRIPE_SECRET_KEY: '«redacted:sk_test_…»',
+    STRIPE_PRO_PRICE_ID: 'price_pro',
+    STRIPE_PRO_PRODUCT_ID: 'prod_pro',
+    STRIPE_PRO_AMOUNT: '489',
+    DB: { prepare() { touched = true; throw new Error('D1 should not be touched'); } },
+  };
+  const response = await request('/checkout/pro', {
+    method: 'POST',
+    headers: { Origin: 'https://spydergoat.test', 'Content-Type': 'text/plain' },
+    body: 'garbage',
+  }, bindings);
+  assert.equal(response.status, 400);
+  assert.equal(touched, false);
+});
+
+test('Pro checkout rejects an origin outside the configured allowlist before D1 or Stripe', async () => {
+  let touched = false;
+  const bindings = {
+    ...env(),
+    PAID_ACCESS_ENABLED: 'true',
+    CHECKOUT_ORIGINS: 'https://spydergoat.test',
+    STRIPE_SECRET_KEY: 'sk_test_redacted',
+    STRIPE_PRO_PRICE_ID: 'price_pro',
+    STRIPE_PRO_PRODUCT_ID: 'prod_pro',
+    STRIPE_PRO_AMOUNT: '489',
+    DB: { prepare() { touched = true; throw new Error('D1 should not be touched'); } },
+  };
+  const response = await request('/checkout/pro', {
+    method: 'POST',
+    headers: { Origin: 'https://evil.example' },
+  }, bindings);
+  assert.equal(response.status, 403);
+  assert.equal(touched, false);
+});
+
+test('enabled Pro checkout binds a server account and sends an allowlisted Stripe command', async () => {
+  const sql = [];
+  const stripeRequests = [];
+  let stripeRequest;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    stripeRequests.push({ url: String(url), init });
+    if (init.method === 'GET') {
+      return Response.json({
+        id: 'price_pro', active: true, currency: 'usd', unit_amount: 489,
+        type: 'recurring', recurring: { interval: 'month' }, product: 'prod_pro',
+      });
+    }
+    stripeRequest = { url: String(url), init, body: new URLSearchParams(init.body) };
+    return new Response(JSON.stringify({ id: 'cs_test_1', url: 'https://checkout.stripe.com/c/pay/cs_test_1' }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  };
+  const bindings = {
+    ...env(),
+    PAID_ACCESS_ENABLED: 'true',
+    CHECKOUT_ORIGINS: 'https://spydergoat.test',
+    STRIPE_SECRET_KEY: 'sk_test_redacted',
+    STRIPE_PRO_PRICE_ID: 'price_pro',
+    STRIPE_PRO_PRODUCT_ID: 'prod_pro',
+    STRIPE_PRO_AMOUNT: '489',
+    DB: {
+      prepare(text) {
+        sql.push(text);
+        return { bind() { return { async run() { return { success: true, meta: { changes: 1 } }; } }; } };
+      },
+    },
+  };
+  try {
+    const response = await request('/checkout/pro', {
+      method: 'POST',
+      headers: { Origin: 'https://spydergoat.test' },
+    }, bindings);
+    const body = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(body.checkout_url, 'https://checkout.stripe.com/c/pay/cs_test_1');
+    assert.match(sql.join('\n'), /INSERT INTO accounts/i);
+    assert.equal(stripeRequests[0].url, 'https://api.stripe.com/v1/prices/price_pro');
+    assert.equal(stripeRequests[0].init.method, 'GET');
+    assert.equal(stripeRequest.url, 'https://api.stripe.com/v1/checkout/sessions');
+    assert.equal(stripeRequest.body.get('mode'), 'subscription');
+    assert.equal(stripeRequest.body.get('line_items[0][price]'), 'price_pro');
+    assert.equal(stripeRequest.body.get('metadata[spydergoat_sku]'), 'subscription');
+    assert.match(stripeRequest.body.get('metadata[spydergoat_account_id]'), /^acct_/);
+    assert.equal(
+      stripeRequest.body.get('subscription_data[metadata][spydergoat_account_id]'),
+      stripeRequest.body.get('metadata[spydergoat_account_id]'),
+    );
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test('HEAD, sitemap, robots and route-specific methods are supported', async () => {
   const head = await request('/', { method: 'HEAD' });
   assert.equal(head.status, 200);

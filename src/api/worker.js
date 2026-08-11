@@ -1,3 +1,7 @@
+import { D1BillingRepository } from '../billing/d1-repository.js';
+import { createProCheckout } from '../billing/service.js';
+import { StripeBillingClient } from '../billing/stripe-client.js';
+
 const RATE_LIMIT_MS = 1_800_000;
 const API_CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -134,6 +138,47 @@ function htmlResponse(body, method) {
   return new Response(method === 'HEAD' ? null : body, { headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', ...SECURITY } });
 }
 
+function paidCatalog(env) {
+  return {
+    subscription: {
+      mode: 'subscription',
+      product: env.STRIPE_PRO_PRODUCT_ID,
+      price: env.STRIPE_PRO_PRICE_ID,
+      currency: 'usd',
+      amount: Number(env.STRIPE_PRO_AMOUNT),
+    },
+  };
+}
+
+function checkoutOriginAllowed(request, env) {
+  const origin = request.headers.get('Origin');
+  const allowed = String(env.CHECKOUT_ORIGINS || '')
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean);
+  return Boolean(origin && allowed.includes(origin));
+}
+
+async function handleProCheckout(request, env) {
+  if (env.PAID_ACCESS_ENABLED !== 'true') return json({ error: 'paid_access_paused' }, 503);
+  if (request.body !== null) return json({ error: 'unexpected_request_body' }, 400);
+  if (!checkoutOriginAllowed(request, env)) return json({ error: 'origin_not_allowed' }, 403);
+  if (!env.DB || !env.STRIPE_SECRET_KEY) return json({ error: 'billing_not_configured' }, 503);
+
+  try {
+    const origin = new URL(request.url).origin;
+    const repository = new D1BillingRepository(env.DB);
+    const stripe = new StripeBillingClient(env.STRIPE_SECRET_KEY);
+    const result = await createProCheckout(repository, stripe, paidCatalog(env), {
+      successUrl: `${origin}/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancelUrl: `${origin}/#pricing`,
+    });
+    return json({ checkout_url: result.checkoutUrl });
+  } catch {
+    return json({ error: 'checkout_unavailable' }, 503);
+  }
+}
+
 async function handle(request, env) {
   const url = new URL(request.url);
   const path = url.pathname;
@@ -143,6 +188,10 @@ async function handle(request, env) {
   if (method === 'OPTIONS') {
     if (!isApi) return new Response(null, { status: 405, headers: { Allow: 'GET, HEAD' } });
     return new Response(null, { status: 204, headers: API_CORS });
+  }
+  if (path === '/checkout/pro') {
+    if (method !== 'POST') return json({ error: 'method_not_allowed' }, 405, { Allow: 'POST' });
+    return handleProCheckout(request, env);
   }
   if (path === '/webhook') {
     if (method !== 'POST') return json({ error: 'method_not_allowed' }, 405, { Allow: 'POST' });

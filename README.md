@@ -37,7 +37,7 @@ curl https://spydergoat.com/mjd
 
 ```json
 {
-  "mjd": 61107.380125,
+  "mjd": 61107.38011574,
   "utc": "2026-03-08T09:07:22.000Z",
   "unix": 1772960842,
   "source": "server"
@@ -55,6 +55,7 @@ curl https://spydergoat.com/jd
 |---|---|
 | `GET /mjd` | Returns MJD, UTC, Unix timestamp, and source |
 | `GET /jd` | Same as `/mjd` plus Julian Date |
+| `POST /checkout/pro` | Local candidate route; disabled by default and capable of initiating payment only after separately approved enablement/configuration |
 | `GET /success?session_id=...` | Fail-closed paid-access notice; no key disclosure |
 | `POST /webhook` | Fail-closed until transactional billing is configured and migrated |
 
@@ -80,11 +81,11 @@ Give apps a tiny edge-hosted clock endpoint without shipping NTP clients, timezo
 
 | Tier | Price | Limit |
 |---|---:|---|
-| Free | $0 | 1 request / 30 min |
+| Free | $0 | 1 successful GET per IP / 30 min, shared across `/mjd` and `/jd`; HEAD is quota-neutral |
 | Pro | $4.89/mo | Paused pending transactional billing cutover |
 | Wallet | $0.001/request | Top-ups disabled pending account binding and ledger rehearsal |
 
-The intended prices remain recorded, but no paid checkout or wallet links are exposed by the local hardened build.
+The intended prices remain recorded, but no paid checkout or wallet links are exposed by the hardened public surface. Local paid-access work remains disabled by default and is not a launch receipt.
 
 ## Why MJD?
 
