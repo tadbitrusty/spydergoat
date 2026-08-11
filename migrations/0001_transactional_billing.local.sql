@@ -10,6 +10,8 @@ CREATE TABLE accounts (
   wallet_balance INTEGER NOT NULL DEFAULT 0 CHECK (wallet_balance >= 0),
   period_start INTEGER,
   period_end INTEGER,
+  last_stripe_event_created INTEGER NOT NULL DEFAULT 0 CHECK (last_stripe_event_created >= 0),
+  last_stripe_event_id TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL DEFAULT (unixepoch()),
   updated_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
@@ -31,6 +33,9 @@ CREATE TABLE stripe_events (
   event_id TEXT PRIMARY KEY,
   claim_token TEXT NOT NULL UNIQUE,
   event_type TEXT NOT NULL,
+  event_created INTEGER NOT NULL CHECK (event_created > 0),
+  checkout_session_id TEXT REFERENCES api_credentials(checkout_session_id),
+  delivery_session_id TEXT REFERENCES key_deliveries(checkout_session_id),
   status TEXT NOT NULL CHECK (status IN ('processing', 'processed')),
   created_at INTEGER NOT NULL,
   processed_at INTEGER

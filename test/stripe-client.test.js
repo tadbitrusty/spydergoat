@@ -69,3 +69,25 @@ test('Stripe client refuses a multi-month recurring price without creating Check
   );
   assert.equal(calls.length, 1);
 });
+
+test('Stripe client retrieves an authoritative expanded Checkout Session by encoded ID', async () => {
+  const calls = [];
+  const fetcher = async (url, init) => {
+    calls.push({ url: String(url), init });
+    return Response.json({ id: 'cs_test/unsafe', line_items: { data: [] }, subscription: { id: 'sub_1' } });
+  };
+  const result = await new StripeBillingClient('test-secret', { fetcher }).retrieveCheckoutSession('cs_test/unsafe');
+  assert.equal(result.id, 'cs_test/unsafe');
+  const url = new URL(calls[0].url);
+  assert.equal(url.pathname, '/v1/checkout/sessions/cs_test%2Funsafe');
+  assert.deepEqual(url.searchParams.getAll('expand[]'), ['line_items.data.price.product', 'subscription']);
+  assert.equal(calls[0].init.method, 'GET');
+});
+
+test('Stripe client fails closed when authoritative Checkout retrieval fails', async () => {
+  const fetcher = async () => new Response('not-json', { status: 502 });
+  await assert.rejects(
+    () => new StripeBillingClient('test-secret', { fetcher }).retrieveCheckoutSession('cs_1'),
+    /retrieval failed with status 502/i,
+  );
+});

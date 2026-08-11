@@ -11,6 +11,22 @@ async function request(path, init = {}, bindings = env()) {
   return worker.fetch(new Request(`https://spydergoat.test${path}`, init), bindings, {});
 }
 
+const encoder = new TextEncoder();
+async function signedWebhook(body, secret, timestamp = Math.floor(Date.now() / 1000)) {
+  const key = await crypto.subtle.importKey('raw', encoder.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const bytes = new Uint8Array(await crypto.subtle.sign('HMAC', key, encoder.encode(`${timestamp}.${body}`)));
+  const signature = [...bytes].map(value => value.toString(16).padStart(2, '0')).join('');
+  return `t=${timestamp},v1=${signature}`;
+}
+
+function webhookBindings(overrides = {}) {
+  return {
+    ...env(), PAID_ACCESS_ENABLED: 'true', DB: {}, STRIPE_WEBHOOK_SECRET: 'whsec_test', STRIPE_SECRET_KEY: 'stripe_test_key',
+    API_KEY_DELIVERY_SECRET_BASE64: Buffer.alloc(32, 9).toString('base64'), STRIPE_LIVEMODE: 'false',
+    STRIPE_PRO_PRICE_ID: 'price_pro', STRIPE_PRO_PRODUCT_ID: 'prod_pro', STRIPE_PRO_AMOUNT: '489', ...overrides,
+  };
+}
+
 test('static website requests delegate to the Cloudflare assets binding', async () => {
   const seen = [];
   const bindings = {
@@ -114,6 +130,137 @@ test('webhook fails closed when transactional billing is not configured', async 
   assert.equal(response.status, 503);
 });
 
+test('webhook requires an exact Stripe livemode configuration', async () => {
+  for (const value of [undefined, '', 'False', 'test', 'TRUE']) {
+    const response = await request('/webhook', { method: 'POST', body: '{}', headers: { 'stripe-signature': 'bad' } }, webhookBindings({ STRIPE_LIVEMODE: value }));
+    assert.equal(response.status, 503);
+  }
+});
+
+test('webhook rejects malformed delivery-secret encoding before D1 or Stripe', async () => {
+  let touched = false;
+  const bindings = webhookBindings({ API_KEY_DELIVERY_SECRET_BASE64: Buffer.alloc(31).toString('base64'), DB: { prepare() { touched = true; } } });
+  const response = await request('/webhook', { method: 'POST', body: '{}', headers: { 'stripe-signature': 'bad' } }, bindings);
+  assert.equal(response.status, 503);
+  assert.equal(touched, false);
+});
+
+test('webhook caps the raw body before signature verification, JSON parse, D1, or Stripe', async () => {
+  let touched = false;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => { touched = true; throw new Error('Stripe must not be touched'); };
+  try {
+    const bindings = webhookBindings({ DB: { prepare() { touched = true; } } });
+    const response = await request('/webhook', { method: 'POST', body: 'x'.repeat(65_537), headers: { 'stripe-signature': 'bad' } }, bindings);
+    assert.equal(response.status, 413);
+    assert.equal(touched, false);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('webhook streaming reader cancels once the 64 KiB accumulation bound is crossed', async () => {
+  let produced = 0;
+  let cancelled = false;
+  const body = new ReadableStream({
+    pull(controller) {
+      produced++;
+      if (produced > 100) return controller.close();
+      controller.enqueue(new Uint8Array(1024));
+    },
+    cancel() { cancelled = true; },
+  });
+  const response = await request('/webhook', {
+    method: 'POST', body, duplex: 'half', headers: { 'stripe-signature': 'bad' },
+  }, webhookBindings());
+  assert.equal(response.status, 413);
+  assert.equal(cancelled, true);
+  assert.equal(produced <= 66, true);
+});
+
+test('webhook verifies the exact raw body before parsing or Stripe/D1 processing', async () => {
+  let touched = false;
+  const raw = '{not-json}';
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => { touched = true; throw new Error('Stripe must not be touched'); };
+  try {
+    const signature = await signedWebhook(raw, 'whsec_test');
+    const bindings = webhookBindings({ DB: { prepare() { touched = true; } } });
+    const response = await request('/webhook', { method: 'POST', body: raw, headers: { 'stripe-signature': signature } }, bindings);
+    assert.equal(response.status, 400);
+    assert.equal(touched, false);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('invalid webhook signature never retrieves Checkout or touches D1', async () => {
+  let touched = false;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => { touched = true; throw new Error('Stripe must not be touched'); };
+  try {
+    const bindings = webhookBindings({ DB: { prepare() { touched = true; } } });
+    const response = await request('/webhook', { method: 'POST', body: JSON.stringify({ id: 'evt_1', type: 'checkout.session.completed' }), headers: { 'stripe-signature': 't=1,v1=' + '0'.repeat(64) } }, bindings);
+    assert.equal(response.status, 400);
+    assert.equal(touched, false);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('unknown signed webhook succeeds ignored without D1 or Stripe', async () => {
+  const raw = JSON.stringify({ id: 'evt_unknown', created: 1_000, type: 'charge.succeeded', data: { object: {} } });
+  const signature = await signedWebhook(raw, 'whsec_test');
+  let touched = false;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => { touched = true; };
+  try {
+    const response = await request('/webhook', { method: 'POST', body: raw, headers: { 'stripe-signature': signature } }, webhookBindings({ DB: { prepare() { touched = true; } } }));
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { received: true, ignored: true });
+    assert.equal(touched, false);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('signed Checkout webhook retrieves authority and provisions only the pending account', async () => {
+  const raw = JSON.stringify({ id: 'evt_checkout', created: 1_100, livemode: false, type: 'checkout.session.completed', data: { object: { id: 'cs_1' } } });
+  const signature = await signedWebhook(raw, 'whsec_test');
+  const statements = [];
+  const db = {
+    prepare(sql) {
+      return { bind(...args) {
+        const statement = {
+          sql, args,
+          async first() {
+            if (/subscription_status = 'pending'/i.test(sql)) return { pending: 1 };
+            return null;
+          },
+          async run() { return { success: true, meta: { changes: 1 } }; },
+        };
+        statements.push(statement);
+        return statement;
+      } };
+    },
+    async batch(batch) { return batch.map(() => ({ success: true, meta: { changes: 1 } })); },
+  };
+  const originalFetch = globalThis.fetch;
+  const stripeCalls = [];
+  globalThis.fetch = async (url, init) => {
+    stripeCalls.push({ url: String(url), init });
+    return Response.json({
+      id: 'cs_1', status: 'complete', payment_status: 'paid', livemode: false, mode: 'subscription',
+      customer: 'cus_1', client_reference_id: 'acct_1', amount_total: 489, currency: 'usd',
+      metadata: { spydergoat_sku: 'subscription', spydergoat_account_id: 'acct_1' },
+      line_items: { data: [{ quantity: 1, price: { id: 'price_pro', product: { id: 'prod_pro' }, unit_amount: 489, currency: 'usd' } }] },
+      subscription: { id: 'sub_1', status: 'active', current_period_start: 1_000, current_period_end: 2_000, metadata: { spydergoat_sku: 'subscription', spydergoat_account_id: 'acct_1' } },
+    });
+  };
+  try {
+    const response = await request('/webhook', { method: 'POST', body: raw, headers: { 'stripe-signature': signature } }, webhookBindings({ DB: db }));
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { received: true, replayed: false, stale: false });
+    assert.equal(stripeCalls.length, 1);
+    assert.match(stripeCalls[0].url, /checkout\/sessions\/cs_1/);
+    assert.equal(statements.some(value => /UPDATE accounts/i.test(value.sql) && /subscription_status = 'pending'/i.test(value.sql)), true);
+    const delivery = statements.find(value => /INSERT INTO key_deliveries/i.test(value.sql));
+    assert.equal(delivery.args[2] instanceof ArrayBuffer, true);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test('Pro checkout remains unavailable unless the paid capability is explicitly enabled', async () => {
   let calls = 0;
   const originalFetch = globalThis.fetch;
@@ -155,7 +302,7 @@ test('Pro checkout rejects an origin outside the configured allowlist before D1 
     ...env(),
     PAID_ACCESS_ENABLED: 'true',
     CHECKOUT_ORIGINS: 'https://spydergoat.test',
-    STRIPE_SECRET_KEY: 'sk_test_redacted',
+    STRIPE_SECRET_KEY: '«redacted:sk_test_…»',
     STRIPE_PRO_PRICE_ID: 'price_pro',
     STRIPE_PRO_PRODUCT_ID: 'prod_pro',
     STRIPE_PRO_AMOUNT: '489',
@@ -167,6 +314,23 @@ test('Pro checkout rejects an origin outside the configured allowlist before D1 
   }, bindings);
   assert.equal(response.status, 403);
   assert.equal(touched, false);
+});
+
+test('Pro checkout requires an exact Stripe livemode configuration before D1 or Stripe', async () => {
+  let touched = false;
+  const bindings = {
+    ...env(), PAID_ACCESS_ENABLED: 'true', CHECKOUT_ORIGINS: 'https://spydergoat.test',
+    STRIPE_SECRET_KEY: '«redacted:sk_test_…»', STRIPE_PRO_PRICE_ID: 'price_pro',
+    STRIPE_PRO_PRODUCT_ID: 'prod_pro', STRIPE_PRO_AMOUNT: '489', STRIPE_LIVEMODE: 'test',
+    DB: { prepare() { touched = true; } },
+  };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => { touched = true; };
+  try {
+    const response = await request('/checkout/pro', { method: 'POST', headers: { Origin: 'https://spydergoat.test' } }, bindings);
+    assert.equal(response.status, 503);
+    assert.equal(touched, false);
+  } finally { globalThis.fetch = originalFetch; }
 });
 
 test('enabled Pro checkout binds a server account and sends an allowlisted Stripe command', async () => {
@@ -196,6 +360,7 @@ test('enabled Pro checkout binds a server account and sends an allowlisted Strip
     STRIPE_PRO_PRICE_ID: 'price_pro',
     STRIPE_PRO_PRODUCT_ID: 'prod_pro',
     STRIPE_PRO_AMOUNT: '489',
+    STRIPE_LIVEMODE: 'false',
     DB: {
       prepare(text) {
         sql.push(text);

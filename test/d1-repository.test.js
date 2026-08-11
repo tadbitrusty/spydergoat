@@ -74,8 +74,9 @@ test('D1 provisioning atomically stores digest-only credential and encrypted del
   });
   assert.equal(result.replayed, false);
   const sql = statements.map(value => value.sql).join('\n');
-  assert.match(sql, /INSERT INTO accounts/i);
-  assert.match(sql, /ON CONFLICT\s*\(id\) DO UPDATE/i);
+  assert.match(sql, /UPDATE accounts/i);
+  assert.match(sql, /subscription_status = 'pending'/i);
+  assert.doesNotMatch(sql, /INSERT INTO accounts/i);
   assert.match(sql, /INSERT INTO api_credentials/i);
   assert.match(sql, /INSERT INTO key_deliveries/i);
   assert.doesNotMatch(sql, /INSERT OR IGNORE INTO (api_credentials|key_deliveries)/i);
@@ -83,18 +84,79 @@ test('D1 provisioning atomically stores digest-only credential and encrypted del
   assert.equal(statements.some(value => value.args.includes('digest-only')), true);
   assert.equal(statements.some(value => value.args.includes('1234abcd')), true);
   assert.equal(statements.some(value => value.args.some(arg => typeof arg === 'string' && arg.startsWith('sg_'))), false);
+  const delivery = statements.find(value => /INSERT INTO key_deliveries/i.test(value.sql));
+  assert.equal(delivery.args[2] instanceof ArrayBuffer, true);
+  assert.equal(delivery.args[3] instanceof ArrayBuffer, true);
 });
 
-test('D1 one-time delivery claim is one conditional UPDATE with RETURNING', async () => {
+test('D1 provisioning rejects when no pending account changed and completion is FK-bound to both artifacts', async () => {
+  const sql = [];
+  const db = {
+    prepare(text) {
+      sql.push(text);
+      return { bind(...args) { return { text, args, async run() { return { success: true, meta: { changes: 1 } }; } }; } };
+    },
+    async batch(statements) {
+      return statements.map((_statement, index) => ({ success: true, meta: { changes: index === 1 ? 0 : 1 } }));
+    },
+  };
+  await assert.rejects(() => new D1BillingRepository(db).applyStripeEventOnce('evt_missing', {
+    kind: 'provision', accountId: 'acct_missing', customerId: 'cus_1', subscriptionId: 'sub_1',
+    checkoutSessionId: 'cs_1', eventCreated: 1_000, periodStart: 1_000, periodEnd: 2_000,
+    credentialId: 'cred_1', keyDigest: 'digest', displaySuffix: '1234abcd',
+    encryptedKey: new Uint8Array([1]), iv: new Uint8Array(12), deliveryExpiresAt: 1_600,
+  }), /account authority/i);
+  assert.equal(sql.some(text => /checkout_session_id = \?4, delivery_session_id = \?4/i.test(text)), true);
+});
+
+test('D1 delivery reads before decrypt and consumes with one conditional update', async () => {
   const log = [];
   const encryptedKey = new Uint8Array([1, 2, 3]);
   const iv = new Uint8Array(12).fill(4);
   const db = { prepare(sql) { return statement(sql, log, { encrypted_key: encryptedKey, iv, expires_at: 1_800 }); } };
-  const result = await new D1BillingRepository(db).claimKeyDeliveryOnce('cs_1', 'acct_1', 1_700);
+  const repository = new D1BillingRepository(db);
+  const result = await repository.readKeyDelivery('cs_1', 'acct_1', 1_700);
   assert.deepEqual(result, { encryptedKey, iv, expiresAt: 1_800 });
-  assert.match(log[0].sql, /UPDATE key_deliveries/i);
+  assert.match(log[0].sql, /SELECT encrypted_key, iv, expires_at/i);
   assert.match(log[0].sql, /consumed_at IS NULL/i);
   assert.match(log[0].sql, /expires_at > /i);
-  assert.match(log[0].sql, /RETURNING encrypted_key, iv, expires_at/i);
   assert.deepEqual(log[0].args, [1_700, 'cs_1', 'acct_1']);
+  assert.equal(await repository.consumeKeyDeliveryOnce('cs_1', 'acct_1', 1_700), true);
+  assert.match(log[1].sql, /UPDATE key_deliveries/i);
+  assert.match(log[1].sql, /RETURNING checkout_session_id/i);
+});
+
+test('D1 lifecycle mutation is event-claimed and rejects stale event.created state updates', async () => {
+  const statements = [];
+  const db = {
+    prepare(sql) { return { bind(...args) { const value = { sql, args }; statements.push(value); return value; } }; },
+    async batch(batch) { return batch.map(() => ({ success: true, meta: { changes: 1 } })); },
+  };
+  await new D1BillingRepository(db).applyStripeEventOnce('evt_lifecycle', {
+    kind: 'lifecycle', type: 'invoice.payment_failed', accountId: 'acct_1', customerId: 'cus_1', subscriptionId: 'sub_1',
+    status: 'past_due', eventCreated: 2_000, resetPeriodCalls: false,
+  });
+  const sql = statements.map(value => value.sql).join('\n');
+  assert.match(sql, /last_stripe_event_created = \?5 AND last_stripe_event_id <> \?6/i);
+  assert.match(sql, /subscription_status = CASE/i);
+  assert.match(sql, /'event_conflict'/i);
+  assert.match(sql, /stripe_subscription_id = /i);
+  assert.match(sql, /EXISTS \(SELECT 1 FROM stripe_events/i);
+  assert.doesNotMatch(sql, /wallet_balance\s*=/i);
+});
+
+test('D1 renewal resets calls conditionally without resetting wallet', async () => {
+  const statements = [];
+  const db = {
+    prepare(sql) { return { bind(...args) { const value = { sql, args }; statements.push(value); return value; } }; },
+    async batch(batch) { return batch.map(() => ({ success: true, meta: { changes: 1 } })); },
+  };
+  await new D1BillingRepository(db).applyStripeEventOnce('evt_renew', {
+    kind: 'lifecycle', type: 'invoice.paid', accountId: 'acct_1', customerId: 'cus_1', subscriptionId: 'sub_1', status: 'active',
+    eventCreated: 3_000, resetPeriodCalls: true, periodStart: 2_000, periodEnd: 3_000,
+  });
+  const update = statements.find(value => /UPDATE accounts/i.test(value.sql));
+  assert.match(update.sql, /current_period_calls = CASE/i);
+  assert.doesNotMatch(update.sql, /wallet_balance\s*=/i);
+  assert.match(update.sql, /\?3 > COALESCE\(period_start, -1\)/i);
 });

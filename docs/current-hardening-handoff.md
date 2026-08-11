@@ -30,7 +30,7 @@ Read in this order:
 
 ## Current local slice
 
-Current paid-access work implements the bounded issuance/delivery seams from Tasks 3–4 of the paid rebuild plan:
+Current paid-access work implements the bounded issuance/delivery and signed lifecycle-webhook seams from Tasks 3–5 of the paid rebuild plan:
 
 - API keys are generated as `sg_` plus 48 cryptographically random lowercase hex characters.
 - SHA-256 digest is the only persisted authentication authority; D1 also stores an eight-character display suffix.
@@ -39,10 +39,13 @@ Current paid-access work implements the bounded issuance/delivery seams from Tas
 - Delivery defaults to ten minutes and cannot be configured beyond fifteen minutes in this service seam.
 - Account activation, credential insertion, encrypted delivery insertion, and Stripe event processing share one D1 batch guarded by the event claim.
 - Checkout Session and one-active-key constraints reject duplicate issuance; delivery insertion requires the matching newly persisted digest.
-- `claimKeyDeliveryOnce` consumes one unexpired account/session-bound row with one conditional `UPDATE ... RETURNING`; the service decrypts only that claimed envelope.
-- `/success` and `/webhook` Worker behavior was not wired and remains fail-closed.
+- Delivery reads the unconsumed envelope, authenticates/decrypts it, then wins one conditional consume before returning plaintext; failed authentication does not burn the delivery and racing readers cannot both receive it.
+- `/webhook` is wired only behind the explicit paid gate, a bounded streaming read that cancels when accumulated body bytes cross 64 KiB, exact raw-body Stripe signature verification, exact `STRIPE_LIVEMODE` configuration, and complete billing/secret configuration.
+- Checkout fulfillment retrieves the authoritative expanded Stripe Session, requires the pre-created pending account, and binds the Stripe customer/subscription and event timestamp before key generation and activation.
+- Subscription renewal, payment-failure, cancellation, and stale-event behavior is idempotent and ordered by authenticated `event.created`; same-second conflicts disable entitlement as `event_conflict` rather than guessing, and renewals reset calls without changing wallet balance.
+- `/success` remains fail-closed, so no Worker route can reveal a key yet.
 
-This slice does not make paid access available. No Worker route can currently issue or reveal the key, no secret is configured, and no migration was applied.
+This slice does not make paid access available. The packaged configuration keeps paid access disabled, no delivery secret is configured, `/success` cannot reveal a key, and no remote migration was applied.
 
 ## Verification at this checkpoint
 
@@ -51,16 +54,15 @@ This slice does not make paid access available. No Worker route can currently is
 
 ## Remaining paid blockers
 
-1. Independent review and packaging of the current issuance/delivery candidate.
+1. Independent review and packaging of the current webhook/lifecycle candidate.
 2. Complete reviewed versioned D1 migration posture.
-3. Signed webhook and success-route runtime integration and body limits.
-4. Renewal/reset, failure, cancellation, and event-order semantics.
-5. Transactional 5,000-call period boundary.
-6. Bearer authentication and allowance consumption.
-7. Disposable local-D1 end-to-end rehearsal.
-8. Separately authorized Stripe test-mode rehearsal.
-9. Separately authorized production-dark configuration and deploy.
-10. Explicit authorization before accepting real payment.
+3. Success-route one-time key delivery.
+4. Transactional 5,000-call period boundary.
+5. Bearer authentication and allowance consumption.
+6. Disposable local-D1 end-to-end rehearsal.
+7. Separately authorized Stripe test-mode rehearsal.
+8. Separately authorized production-dark configuration and deploy.
+9. Explicit authorization before accepting real payment.
 
 ## Hard stop-lines
 

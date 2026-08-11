@@ -65,17 +65,16 @@ Wallet stays paused until the simpler subscription lifecycle is proven. The exis
 
 ### Current execution checkpoint — local only
 
-Tasks 3–4 now have a bounded local candidate on `feature/paid-access-v1`: checkout completion service processing generates `sg_` plus 48 random hex characters, treats only the SHA-256 digest as authentication authority, stores an eight-character display suffix, and creates a ten-minute AES-GCM delivery envelope using an injected exactly-32-byte secret. Account ID, Checkout Session ID, and expiry are authenticated as AES-GCM additional data. D1 provisioning places account activation, credential digest, delivery envelope, and Stripe event receipt in one transactional batch; unique session/account constraints and event claims fail closed against duplicate credentials or a second delivery. Atomic claim/decrypt repository and service seams exist, but Worker `/success` and `/webhook` routes remain deliberately unwired and fail closed. This work is not committed, released, or enabled.
+Tasks 3–5 now have a bounded local candidate on `feature/paid-access-v1`: checkout completion generates `sg_` plus 48 random hex characters only after proving the pre-created pending account, treats only the SHA-256 digest as authentication authority, stores an eight-character display suffix, and creates a ten-minute AES-GCM delivery envelope using an injected exactly-32-byte secret. Account ID, Checkout Session ID, and expiry are authenticated as AES-GCM additional data. D1 provisioning places pending-account activation, credential digest, delivery envelope, and Stripe event receipt in one transactional batch; completion is foreign-key-bound to both artifacts so missing authority rolls back rather than leaving an unrecoverable event claim. The gated Worker webhook uses a bounded streaming read, verifies the exact raw body, requires exact Stripe test/live-mode agreement, retrieves the authoritative Checkout Session, and applies renewal/failure/cancellation state. Same-second lifecycle ambiguity disables entitlement instead of guessing order. Delivery authenticates before one conditional consume. `/success` remains deliberately fail closed. None of this is released or enabled.
 
 ### Missing before money can move
 
-1. Complete independent review and packaging of the digest-only issuance and one-time-delivery candidate.
-2. No live Worker webhook or success-route integration.
-3. No renewal/reset, cancellation, or failed-payment event handling.
-4. No verified period-boundary behavior for the 5,000-call allowance.
-5. No local D1 migration rehearsal receipt.
-6. No Stripe test-mode catalog/webhook rehearsal.
-7. No production migration, secrets, products/prices, or guarded enable flag.
+1. Complete independent review and packaging of the signed webhook/lifecycle candidate.
+2. No success-route integration.
+3. No verified period-boundary behavior for the 5,000-call allowance.
+4. No local D1 end-to-end rehearsal receipt.
+5. No Stripe test-mode catalog/webhook rehearsal.
+6. No production migration, secrets, products/prices, or guarded enable flag.
 
 **Current launch posture:** Paid launch remains **NO-GO**, correctly and intentionally.
 

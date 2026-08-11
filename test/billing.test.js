@@ -18,7 +18,9 @@ const catalog = {
 function validSession(overrides = {}) {
   return {
     id: 'cs_1', mode: 'subscription', payment_status: 'paid', status: 'complete', livemode: false,
-    customer: 'cus_1', amount_total: 489, currency: 'usd',
+    customer: 'cus_1',
+    subscription: { id: 'sub_1', status: 'active', current_period_start: 1_000, current_period_end: 2_000, metadata: { spydergoat_account_id: 'acct_1', spydergoat_sku: 'subscription' } },
+    amount_total: 489, currency: 'usd', client_reference_id: 'acct_1',
     metadata: { spydergoat_sku: 'subscription', spydergoat_account_id: 'acct_1' },
     line_items: { data: [{ quantity: 1, price: { id: 'price_pro', product: 'prod_pro', unit_amount: 489, currency: 'usd' } }] },
     ...overrides,
@@ -148,22 +150,27 @@ test('concurrent allowance accounting does not lose updates or overspend wallet'
   assert.equal(repo.wallet, 0);
 });
 
-test('duplicate subscription event neither rotates nor creates a second key', async () => {
+test('duplicate subscription event does not regenerate or rotate key material', async () => {
   const commands = [];
+  let randomCalls = 0;
   const repo = {
     seen: false,
+    async hasStripeEvent() { return this.seen; },
     async applyStripeEventOnce(eventId, command) {
       commands.push(command);
-      if (this.seen) return { replayed: true };
       this.seen = true;
       return { replayed: false };
     },
   };
-  const event = { id: 'evt_sub', type: 'checkout.session.completed', data: { object: validSession() } };
-  const options = { livemode: false, deliverySecret: new Uint8Array(32).fill(9), now: () => 1_000 };
+  const event = { id: 'evt_sub', created: 1_000, livemode: false, type: 'checkout.session.completed', data: { object: validSession() } };
+  const options = {
+    livemode: false, deliverySecret: new Uint8Array(32).fill(9), now: () => 1_000,
+    fillRandom(bytes) { randomCalls++; bytes.fill(0xab); return bytes; },
+  };
   assert.equal((await processStripeEvent(repo, event, catalog, options)).replayed, false);
   assert.equal((await processStripeEvent(repo, event, catalog, options)).replayed, true);
-  assert.equal(commands.length, 2);
+  assert.equal(commands.length, 1);
+  assert.equal(randomCalls, 1);
   assert.equal(commands[0].kind, 'provision');
   assert.equal(commands[0].accountId, 'acct_1');
   assert.equal(commands[0].checkoutSessionId, 'cs_1');
@@ -174,7 +181,22 @@ test('duplicate subscription event neither rotates nor creates a second key', as
   assert.equal(commands[0].encryptedKey instanceof Uint8Array, true);
   assert.equal(commands[0].iv.byteLength, 12);
   assert.equal(JSON.stringify(commands[0]).includes('sg_'), false);
-  assert.notEqual(commands[1].keyDigest, commands[0].keyDigest);
+});
+
+test('checkout fulfillment requires the pre-created pending account before key generation', async () => {
+  let randomTouched = false;
+  const repo = {
+    async hasStripeEvent() { return false; },
+    async hasPendingAccount() { return false; },
+    async applyStripeEventOnce() { throw new Error('must not apply'); },
+  };
+  await assert.rejects(() => processStripeEvent(repo, {
+    id: 'evt_unbound', created: 1_000, livemode: false, type: 'checkout.session.completed', data: { object: validSession() },
+  }, catalog, {
+    livemode: false, deliverySecret: new Uint8Array(32).fill(9),
+    fillRandom(bytes) { randomTouched = true; return bytes; },
+  }), /account authority/i);
+  assert.equal(randomTouched, false);
 });
 
 test('API key generation uses 24 random bytes for sg_ plus 48 lowercase hex characters', () => {
@@ -196,23 +218,22 @@ test('malformed checkout event without an id fails closed', async () => {
   );
 });
 
-test('duplicate top-up event credits exactly once and requires deterministic binding', async () => {
+test('top-up Checkout remains fail-closed in the Pro-first runtime', async () => {
   const repo = new AtomicRepository();
   const session = validSession({
     mode: 'payment', amount_total: 100,
     metadata: { spydergoat_sku: 'topup_1000', spydergoat_account_id: 'acct_1' },
     line_items: { data: [{ quantity: 1, price: { id: 'price_1k', product: 'prod_1k', unit_amount: 100, currency: 'usd' } }] },
   });
-  const event = { id: 'evt_topup', type: 'checkout.session.completed', data: { object: session } };
-  await processStripeEvent(repo, event, catalog, { livemode: false });
-  await processStripeEvent(repo, event, catalog, { livemode: false });
-  assert.equal(repo.credits, 1000);
+  const event = { id: 'evt_topup', created: 1_000, livemode: false, type: 'checkout.session.completed', data: { object: session } };
+  await assert.rejects(() => processStripeEvent(repo, event, catalog, { livemode: false }), /failed closed/i);
+  assert.equal(repo.credits, 0);
 });
 
 test('top-up without deterministic account binding fails closed', async () => {
   const repo = new AtomicRepository();
   const session = validSession({ mode: 'payment', amount_total: 100, metadata: { spydergoat_sku: 'topup_1000' }, line_items: { data: [{ quantity: 1, price: { id: 'price_1k', product: 'prod_1k', unit_amount: 100, currency: 'usd' } }] } });
-  await assert.rejects(() => processStripeEvent(repo, { id: 'evt_bad', type: 'checkout.session.completed', data: { object: session } }, catalog, { livemode: false }), /account binding/i);
+  await assert.rejects(() => processStripeEvent(repo, { id: 'evt_bad', created: 1_000, livemode: false, type: 'checkout.session.completed', data: { object: session } }, catalog, { livemode: false }), /account binding|failed closed/i);
   assert.equal(repo.credits, 0);
 });
 
@@ -226,15 +247,86 @@ test('API key authentication hashes credentials and fails closed', async () => {
   await assert.rejects(() => authenticateApiKey(repo, 'bad'), /invalid api key/i);
 });
 
-test('raw API keys never appear in structured logs', async () => {
-  const raw = 'sg_' + 'b'.repeat(48);
+test('generated plaintext API key never appears in structured logs', async () => {
+  const raw = `sg_${'bb'.repeat(24)}`;
   const lines = [];
   const logger = { info(event, fields) { lines.push(JSON.stringify({ event, ...fields })); } };
-  const repo = { async applyStripeEventOnce() { return { replayed: false }; } };
-  await processStripeEvent(repo, { id: 'evt_log', type: 'checkout.session.completed', data: { object: validSession() } }, catalog, {
+  const repo = { async hasStripeEvent() { return false; }, async applyStripeEventOnce() { return { replayed: false }; } };
+  await processStripeEvent(repo, { id: 'evt_log', created: 1_000, livemode: false, type: 'checkout.session.completed', data: { object: validSession() } }, catalog, {
     livemode: false,
     logger,
     deliverySecret: new Uint8Array(32).fill(8),
+    fillRandom(bytes) { bytes.fill(0xbb); return bytes; },
   });
   assert.equal(lines.join('\n').includes(raw), false);
+});
+
+test('checkout provisioning persists authoritative subscription and event ordering fields', async () => {
+  let command;
+  const repo = { async applyStripeEventOnce(_id, value) { command = value; return { replayed: false }; } };
+  await processStripeEvent(repo, { id: 'evt_checkout', created: 1_100, livemode: false, type: 'checkout.session.completed', data: { object: validSession() } }, catalog, {
+    livemode: false, deliverySecret: new Uint8Array(32).fill(7), now: () => 1_100,
+  });
+  assert.equal(command.subscriptionId, 'sub_1');
+  assert.equal(command.periodStart, 1_000);
+  assert.equal(command.periodEnd, 2_000);
+  assert.equal(command.eventCreated, 1_100);
+});
+
+test('subscription lifecycle maps cancellation and payment failure without resetting usage', async () => {
+  const commands = [];
+  const repo = { async applyStripeEventOnce(_id, command) { commands.push(command); return { replayed: false }; } };
+  const metadata = { spydergoat_account_id: 'acct_1', spydergoat_sku: 'subscription' };
+  await processStripeEvent(repo, { id: 'evt_failed', created: 1_200, livemode: false, type: 'invoice.payment_failed', data: { object: { id: 'in_1', subscription: 'sub_1', customer: 'cus_1', status: 'open', paid: false, subscription_details: { metadata } } } }, catalog, { livemode: false });
+  await processStripeEvent(repo, { id: 'evt_deleted', created: 1_300, livemode: false, type: 'customer.subscription.deleted', data: { object: { id: 'sub_1', customer: 'cus_1', status: 'canceled', current_period_start: 1_000, current_period_end: 2_000, metadata } } }, catalog, { livemode: false });
+  assert.deepEqual(commands.map(value => [value.kind, value.status, value.resetPeriodCalls]), [
+    ['lifecycle', 'past_due', false],
+    ['lifecycle', 'canceled', false],
+  ]);
+});
+
+test('lifecycle processing rejects Stripe events from the wrong livemode', async () => {
+  let touched = false;
+  const repo = { async applyStripeEventOnce() { touched = true; } };
+  const metadata = { spydergoat_account_id: 'acct_1', spydergoat_sku: 'subscription' };
+  await assert.rejects(() => processStripeEvent(repo, {
+    id: 'evt_wrong_mode', created: 1_200, livemode: false, type: 'customer.subscription.updated',
+    data: { object: { id: 'sub_1', customer: 'cus_1', status: 'active', current_period_start: 1_000, current_period_end: 2_000, metadata } },
+  }, catalog, { livemode: true }), /livemode/i);
+  assert.equal(touched, false);
+});
+
+test('lifecycle processing rejects a missing account/customer/subscription authority match', async () => {
+  let touched = false;
+  const repo = {
+    async hasLifecycleAuthority() { return false; },
+    async applyStripeEventOnce() { touched = true; },
+  };
+  const metadata = { spydergoat_account_id: 'acct_1', spydergoat_sku: 'subscription' };
+  await assert.rejects(() => processStripeEvent(repo, {
+    id: 'evt_unbound_lifecycle', created: 1_200, livemode: false, type: 'customer.subscription.updated',
+    data: { object: { id: 'sub_1', customer: 'cus_1', status: 'active', current_period_start: 1_000, current_period_end: 2_000, metadata } },
+  }, catalog, { livemode: false }), /account authority/i);
+  assert.equal(touched, false);
+});
+
+test('paid renewal resets period calls but never changes wallet balance', async () => {
+  let command;
+  const repo = { async applyStripeEventOnce(_id, value) { command = value; return { replayed: false }; } };
+  const metadata = { spydergoat_account_id: 'acct_1', spydergoat_sku: 'subscription' };
+  await processStripeEvent(repo, { id: 'evt_renewal', created: 2_100, livemode: false, type: 'invoice.paid', data: { object: {
+    id: 'in_1', subscription: 'sub_1', customer: 'cus_1', status: 'paid', paid: true, billing_reason: 'subscription_cycle',
+    subscription_details: { metadata }, lines: { data: [{ type: 'subscription', period: { start: 2_000, end: 3_000 }, subscription: 'sub_1' }] },
+  } } }, catalog, { livemode: false });
+  assert.equal(command.resetPeriodCalls, true);
+  assert.equal(command.periodStart, 2_000);
+  assert.equal(command.periodEnd, 3_000);
+  assert.equal('walletBalance' in command, false);
+});
+
+test('unknown Stripe events return ignored without touching the repository', async () => {
+  let touched = false;
+  const result = await processStripeEvent({ async applyStripeEventOnce() { touched = true; } }, { type: 'charge.succeeded' }, catalog);
+  assert.deepEqual(result, { ignored: true });
+  assert.equal(touched, false);
 });

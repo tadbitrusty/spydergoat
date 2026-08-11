@@ -44,7 +44,9 @@ export async function decryptApiKeyDelivery(envelope, options) {
 
 export async function claimAndDecryptApiKey(repository, options) {
   const { accountId, checkoutSessionId, now } = options || {};
-  const envelope = await repository.claimKeyDeliveryOnce(checkoutSessionId, accountId, now);
+  const envelope = await repository.readKeyDelivery(checkoutSessionId, accountId, now);
   if (!envelope) return null;
-  return decryptApiKeyDelivery(envelope, options);
+  const rawKey = await decryptApiKeyDelivery(envelope, options);
+  const consumed = await repository.consumeKeyDeliveryOnce(checkoutSessionId, accountId, now);
+  return consumed ? rawKey : null;
 }

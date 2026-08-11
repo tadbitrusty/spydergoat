@@ -1,8 +1,10 @@
 import { D1BillingRepository } from '../billing/d1-repository.js';
-import { createProCheckout } from '../billing/service.js';
+import { createProCheckout, processStripeEvent } from '../billing/service.js';
 import { StripeBillingClient } from '../billing/stripe-client.js';
+import { verifyStripeSignature } from '../billing/stripe.js';
 
 const RATE_LIMIT_MS = 1_800_000;
+const MAX_WEBHOOK_BYTES = 65_536;
 const API_CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
@@ -163,7 +165,9 @@ async function handleProCheckout(request, env) {
   if (env.PAID_ACCESS_ENABLED !== 'true') return json({ error: 'paid_access_paused' }, 503);
   if (request.body !== null) return json({ error: 'unexpected_request_body' }, 400);
   if (!checkoutOriginAllowed(request, env)) return json({ error: 'origin_not_allowed' }, 403);
-  if (!env.DB || !env.STRIPE_SECRET_KEY) return json({ error: 'billing_not_configured' }, 503);
+  if (!env.DB || !env.STRIPE_SECRET_KEY || !['true', 'false'].includes(env.STRIPE_LIVEMODE)) {
+    return json({ error: 'billing_not_configured' }, 503);
+  }
 
   try {
     const origin = new URL(request.url).origin;
@@ -176,6 +180,79 @@ async function handleProCheckout(request, env) {
     return json({ checkout_url: result.checkoutUrl });
   } catch {
     return json({ error: 'checkout_unavailable' }, 503);
+  }
+}
+
+function decodeDeliverySecret(value) {
+  const text = String(value || '');
+  if (!/^[A-Za-z0-9+/]{43}=$/.test(text)) throw new Error('delivery secret');
+  const binary = atob(text);
+  if (binary.length !== 32) throw new Error('delivery secret');
+  return Uint8Array.from(binary, character => character.charCodeAt(0));
+}
+
+async function readWebhookBody(request) {
+  const declaredLength = Number(request.headers.get('Content-Length'));
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_WEBHOOK_BYTES) throw new RangeError('payload too large');
+  if (!request.body) return '';
+  const reader = request.body.getReader();
+  const chunks = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_WEBHOOK_BYTES) {
+      await reader.cancel('payload too large');
+      throw new RangeError('payload too large');
+    }
+    chunks.push(value);
+  }
+  const body = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) { body.set(chunk, offset); offset += chunk.byteLength; }
+  return new TextDecoder('utf-8', { fatal: true }).decode(body);
+}
+
+async function handleWebhook(request, env) {
+  if (env.PAID_ACCESS_ENABLED !== 'true') return json({ error: 'paid_access_paused' }, 503);
+  if (!env.DB || !env.STRIPE_WEBHOOK_SECRET || !env.STRIPE_SECRET_KEY || !['true', 'false'].includes(env.STRIPE_LIVEMODE)) {
+    return json({ error: 'billing_not_configured' }, 503);
+  }
+  let deliverySecret;
+  try { deliverySecret = decodeDeliverySecret(env.API_KEY_DELIVERY_SECRET_BASE64); }
+  catch { return json({ error: 'billing_not_configured' }, 503); }
+
+  let raw;
+  try { raw = await readWebhookBody(request); }
+  catch (error) { return json({ error: error instanceof RangeError ? 'payload_too_large' : 'invalid_payload' }, error instanceof RangeError ? 413 : 400); }
+
+  const verification = await verifyStripeSignature(raw, request.headers.get('Stripe-Signature'), env.STRIPE_WEBHOOK_SECRET);
+  if (!verification.valid) return json({ error: 'invalid_signature' }, 400);
+
+  let event;
+  try { event = JSON.parse(raw); }
+  catch { return json({ error: 'invalid_payload' }, 400); }
+
+  const supported = new Set([
+    'checkout.session.completed', 'invoice.paid', 'invoice.payment_failed',
+    'customer.subscription.updated', 'customer.subscription.deleted',
+  ]);
+  if (!supported.has(event?.type)) return json({ received: true, ignored: true });
+
+  try {
+    if (event.type === 'checkout.session.completed') {
+      const sessionId = event.data?.object?.id;
+      if (!sessionId) throw new Error('Checkout Session ID is required');
+      const stripe = new StripeBillingClient(env.STRIPE_SECRET_KEY);
+      event = { ...event, data: { object: await stripe.retrieveCheckoutSession(sessionId) } };
+    }
+    const result = await processStripeEvent(new D1BillingRepository(env.DB), event, paidCatalog(env), {
+      livemode: env.STRIPE_LIVEMODE === 'true', deliverySecret,
+    });
+    return json({ received: true, replayed: Boolean(result.replayed), stale: Boolean(result.stale) });
+  } catch {
+    return json({ error: 'webhook_rejected' }, 400);
   }
 }
 
@@ -195,7 +272,7 @@ async function handle(request, env) {
   }
   if (path === '/webhook') {
     if (method !== 'POST') return json({ error: 'method_not_allowed' }, 405, { Allow: 'POST' });
-    return json({ error: 'billing_not_configured' }, 503);
+    return handleWebhook(request, env);
   }
   if (!['GET', 'HEAD'].includes(method)) {
     return json({ error: 'method_not_allowed' }, 405, { Allow: isApi ? 'GET, HEAD, OPTIONS' : 'GET, HEAD' });

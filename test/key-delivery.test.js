@@ -72,7 +72,7 @@ test('delivery decryption fails closed at expiry', async () => {
   }), /expired/i);
 });
 
-test('claim seam atomically consumes before decrypting and returns no key on replay', async () => {
+test('claim seam authenticates ciphertext before one-time consume and returns no key on replay', async () => {
   const envelope = await encryptApiKeyDelivery(rawKey, {
     secret,
     accountId: 'acct_1',
@@ -81,11 +81,15 @@ test('claim seam atomically consumes before decrypting and returns no key on rep
   });
   let available = true;
   const repository = {
-    async claimKeyDeliveryOnce(checkoutSessionId, accountId, now) {
+    async readKeyDelivery(checkoutSessionId, accountId, now) {
       assert.deepEqual([checkoutSessionId, accountId, now], ['cs_1', 'acct_1', 1_700]);
-      if (!available) return null;
+      return available ? envelope : null;
+    },
+    async consumeKeyDeliveryOnce(checkoutSessionId, accountId, now) {
+      assert.deepEqual([checkoutSessionId, accountId, now], ['cs_1', 'acct_1', 1_700]);
+      if (!available) return false;
       available = false;
-      return envelope;
+      return true;
     },
   };
 
@@ -101,4 +105,19 @@ test('claim seam atomically consumes before decrypting and returns no key on rep
     checkoutSessionId: 'cs_1',
     now: 1_700,
   }), null);
+});
+
+test('authentication failure does not consume the one-time delivery', async () => {
+  const envelope = await encryptApiKeyDelivery(rawKey, {
+    secret, accountId: 'acct_1', checkoutSessionId: 'cs_1', expiresAt: 1_800,
+  });
+  let consumed = false;
+  const repository = {
+    async readKeyDelivery() { return envelope; },
+    async consumeKeyDeliveryOnce() { consumed = true; return true; },
+  };
+  await assert.rejects(() => claimAndDecryptApiKey(repository, {
+    secret: new Uint8Array(32).fill(8), accountId: 'acct_1', checkoutSessionId: 'cs_1', now: 1_700,
+  }));
+  assert.equal(consumed, false);
 });

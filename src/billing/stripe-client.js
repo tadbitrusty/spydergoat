@@ -86,4 +86,25 @@ export class StripeBillingClient {
     }
     return { id: required(result?.id, 'Stripe checkout session ID'), url: checkoutUrl.toString() };
   }
+
+  async retrieveCheckoutSession(sessionId) {
+    const id = required(sessionId, 'Stripe checkout session ID');
+    const url = new URL(`${STRIPE_CHECKOUT_ENDPOINT}/${encodeURIComponent(id)}`);
+    url.searchParams.append('expand[]', 'line_items.data.price.product');
+    url.searchParams.append('expand[]', 'subscription');
+    const response = await this.fetcher(url.toString(), {
+      method: 'GET',
+      headers: { Authorization: 'Bearer ' + this.secretKey },
+    });
+    let session;
+    try {
+      session = await response.json();
+    } catch {
+      throw new Error(`Stripe Checkout retrieval failed with status ${response.status}`);
+    }
+    if (!response.ok || session?.id !== id) {
+      throw new Error(`Stripe Checkout retrieval failed with status ${response.status}`);
+    }
+    return session;
+  }
 }
