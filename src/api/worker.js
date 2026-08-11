@@ -1,7 +1,8 @@
 import { D1BillingRepository } from '../billing/d1-repository.js';
-import { createProCheckout, processStripeEvent } from '../billing/service.js';
+import { authenticateApiKey, consumePaidRequest, createProCheckout, processStripeEvent, validateCheckoutSession } from '../billing/service.js';
 import { StripeBillingClient } from '../billing/stripe-client.js';
 import { verifyStripeSignature } from '../billing/stripe.js';
+import { claimAndDecryptApiKey } from '../billing/key-delivery.js';
 
 const RATE_LIMIT_MS = 1_800_000;
 const MAX_WEBHOOK_BYTES = 65_536;
@@ -256,6 +257,90 @@ async function handleWebhook(request, env) {
   }
 }
 
+function successPage(apiKey) {
+  const content = apiKey
+    ? `<h1>Your SpyderGoat API key</h1><p>This key is shown once. Save it now.</p><code>${apiKey}</code>`
+    : '<h1>Key delivery unavailable</h1><p>The webhook may still be processing, or this one-time key was already viewed or expired.</p>';
+  return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SpyderGoat key delivery</title><style>body{max-width:48rem;margin:4rem auto;padding:1rem;font:18px system-ui;background:#101114;color:#f5f5f5}code{display:block;overflow-wrap:anywhere;padding:1rem;background:#202228;border:1px solid #555;border-radius:.5rem}</style><main>${content}</main></html>`;
+}
+
+function sensitiveHtml(apiKey, status = 200) {
+  return new Response(successPage(apiKey), {
+    status,
+    headers: {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store, max-age=0',
+      Pragma: 'no-cache',
+      'Referrer-Policy': 'no-referrer',
+      'X-Robots-Tag': 'noindex, nofollow',
+      'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+      'X-Content-Type-Options': 'nosniff',
+    },
+  });
+}
+
+async function handleSuccess(request, env) {
+  if (env.PAID_ACCESS_ENABLED !== 'true') return sensitiveUnavailable();
+  if (!env.DB || !env.STRIPE_SECRET_KEY || !['true', 'false'].includes(env.STRIPE_LIVEMODE)) return sensitiveUnavailable();
+  let deliverySecret;
+  try { deliverySecret = decodeDeliverySecret(env.API_KEY_DELIVERY_SECRET_BASE64); }
+  catch { return sensitiveUnavailable(); }
+  const url = new URL(request.url);
+  const parameters = [...url.searchParams.entries()];
+  const sessionId = parameters.length === 1 && parameters[0][0] === 'session_id' ? parameters[0][1] : '';
+  if (!/^cs_[0-9a-z_]{8,255}$/i.test(sessionId)) return sensitiveHtml(null, 400);
+  try {
+    const stripe = new StripeBillingClient(env.STRIPE_SECRET_KEY);
+    const session = await stripe.retrieveCheckoutSession(sessionId);
+    const accountId = session?.metadata?.spydergoat_account_id;
+    const validation = validateCheckoutSession(session, paidCatalog(env), {
+      livemode: env.STRIPE_LIVEMODE === 'true', accountId,
+    });
+    if (!validation.ok) return sensitiveHtml(null, 409);
+    const rawKey = await claimAndDecryptApiKey(new D1BillingRepository(env.DB), {
+      accountId, checkoutSessionId: sessionId, secret: deliverySecret, now: Math.floor(Date.now() / 1000),
+    });
+    return sensitiveHtml(rawKey, rawKey ? 200 : 409);
+  } catch {
+    return sensitiveHtml(null, 409);
+  }
+}
+
+function bearerApiKey(value) {
+  const match = /^Bearer (sg_[0-9a-f]{48})$/i.exec(String(value || ''));
+  return match?.[1] || null;
+}
+
+async function handlePaidApi(request, env, path, method) {
+  if (env.PAID_ACCESS_ENABLED !== 'true') return json({ error: 'paid_access_paused' }, 503, API_CORS);
+  if (!env.DB) return json({ error: 'billing_not_configured' }, 503, API_CORS);
+  const rawKey = bearerApiKey(request.headers.get('Authorization'));
+  if (!rawKey) return json({ error: 'invalid_api_key' }, 401, { 'WWW-Authenticate': 'Bearer', ...API_CORS });
+  try {
+    const repository = new D1BillingRepository(env.DB);
+    const account = await authenticateApiKey(repository, rawKey);
+    if (method === 'HEAD') {
+      return new Response(null, { headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...API_CORS } });
+    }
+    const allowance = await consumePaidRequest(repository, account.id, Math.floor(Date.now() / 1000));
+    if (!allowance.allowed) {
+      return json({ error: 'paid_quota_exhausted' }, 429, { 'X-RateLimit-Limit': '5000', 'X-RateLimit-Remaining': '0', ...API_CORS });
+    }
+    const remaining = Math.max(0, 5000 - allowance.calls);
+    return new Response(JSON.stringify(buildTimeResponse(Date.now(), path === '/jd')), {
+      headers: {
+        'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store',
+        'X-RateLimit-Limit': '5000', 'X-RateLimit-Remaining': String(remaining), ...API_CORS,
+      },
+    });
+  } catch (error) {
+    if (error?.message === 'Invalid API key') {
+      return json({ error: 'invalid_api_key' }, 401, { 'WWW-Authenticate': 'Bearer', ...API_CORS });
+    }
+    return json({ error: 'paid_access_unavailable' }, 503, API_CORS);
+  }
+}
+
 async function handle(request, env) {
   const url = new URL(request.url);
   const path = url.pathname;
@@ -274,16 +359,19 @@ async function handle(request, env) {
     if (method !== 'POST') return json({ error: 'method_not_allowed' }, 405, { Allow: 'POST' });
     return handleWebhook(request, env);
   }
+  if (path === '/success') {
+    if (method !== 'GET') return json({ error: 'method_not_allowed' }, 405, { Allow: 'GET' });
+    return handleSuccess(request, env);
+  }
   if (!['GET', 'HEAD'].includes(method)) {
     return json({ error: 'method_not_allowed' }, 405, { Allow: isApi ? 'GET, HEAD, OPTIONS' : 'GET, HEAD' });
   }
   if ((path === '/' || path === '/index.html') && env.ASSETS) return assetHomepage(request, env);
   if (path === '/' || path === '/index.html') return htmlResponse(homepage(Date.now()), method);
-  if (path === '/success') return sensitiveUnavailable();
   if (path === '/robots.txt') return new Response(method === 'HEAD' ? null : 'User-agent: *\nAllow: /\nSitemap: https://spydergoat.com/sitemap.xml\n', { headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
   if (path === '/sitemap.xml') return new Response(method === 'HEAD' ? null : '<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>https://spydergoat.com/</loc></url></urlset>', { headers: { 'Content-Type': 'application/xml; charset=utf-8' } });
   if (isApi) {
-    if (request.headers.has('Authorization')) return json({ error: 'paid_access_paused' }, 503, API_CORS);
+    if (request.headers.has('Authorization')) return handlePaidApi(request, env, path, method);
     if (method === 'HEAD') return new Response(null, { headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...API_CORS } });
     const limit = await checkFreeRateLimit(request, env);
     if (!limit.allowed) return json({ error: 'rate_limited', message: 'Free tier: 1 request per 30 minutes', retry_after: limit.retryAfter }, 429, { 'Retry-After': String(limit.retryAfter), ...API_CORS });

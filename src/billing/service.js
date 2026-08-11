@@ -62,7 +62,7 @@ export async function authenticateApiKey(repository, rawKey) {
   if (!/^sg_[0-9a-f]{48}$/i.test(String(rawKey || ''))) throw new Error('Invalid API key');
   const digest = await hashApiKey(rawKey);
   const account = await repository.findAccountByKeyDigest(digest);
-  if (!account || account.active === false) throw new Error('Invalid API key');
+  if (!account || (account.active !== true && account.active !== 1)) throw new Error('Invalid API key');
   return account;
 }
 
@@ -111,8 +111,8 @@ export function validateCheckoutSession(session, catalog, expected = {}) {
     : { ok: false, error: 'Checkout session failed closed validation' };
 }
 
-export async function consumePaidRequest(repository, accountId) {
-  return repository.consumeAllowance(accountId);
+export async function consumePaidRequest(repository, accountId, now) {
+  return repository.consumeAllowance(accountId, now);
 }
 
 function requiredEventCreated(event) {

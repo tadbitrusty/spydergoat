@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import worker from '../src/api/worker.js';
+import { encryptApiKeyDelivery } from '../src/billing/key-delivery.js';
 
 function env() {
   const values = new Map();
@@ -123,6 +124,91 @@ test('success route never calls Stripe or reveals a key while paid flow is gated
     assert.match(response.headers.get('cache-control') || '', /no-store/);
     assert.equal(response.headers.get('referrer-policy'), 'no-referrer');
   } finally { globalThis.fetch = originalFetch; }
+});
+
+test('enabled success validates Stripe authority and reveals one encrypted delivery with no-store isolation', async () => {
+  const rawKey = `sg_${'ab'.repeat(24)}`;
+  const secret = new Uint8Array(32).fill(9);
+  const expiresAt = Math.floor(Date.now() / 1000) + 600;
+  const envelope = await encryptApiKeyDelivery(rawKey, {
+    accountId: 'acct_1', checkoutSessionId: 'cs_test_123456', expiresAt, secret,
+  });
+  const sql = [];
+  const db = {
+    prepare(text) {
+      sql.push(text);
+      return { bind() { return { async first() {
+        if (/SELECT encrypted_key/i.test(text)) return { encrypted_key: envelope.encryptedKey, iv: envelope.iv, expires_at: expiresAt };
+        if (/UPDATE key_deliveries/i.test(text)) return { consumed_at: Math.floor(Date.now() / 1000) };
+        return null;
+      } }; } };
+    },
+  };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({
+    id: 'cs_test_123456', status: 'complete', payment_status: 'paid', livemode: false, mode: 'subscription',
+    customer: 'cus_1', client_reference_id: 'acct_1', amount_total: 489, currency: 'usd',
+    metadata: { spydergoat_sku: 'subscription', spydergoat_account_id: 'acct_1' },
+    line_items: { data: [{ quantity: 1, price: { id: 'price_pro', product: { id: 'prod_pro' }, unit_amount: 489, currency: 'usd' } }] },
+    subscription: { id: 'sub_1', status: 'active', current_period_start: 1_000, current_period_end: 2_000, metadata: { spydergoat_sku: 'subscription', spydergoat_account_id: 'acct_1' } },
+  });
+  try {
+    const response = await request('/success?session_id=cs_test_123456', {}, webhookBindings({ DB: db }));
+    const body = await response.text();
+    assert.equal(response.status, 200);
+    assert.match(body, new RegExp(rawKey));
+    assert.match(response.headers.get('cache-control'), /no-store/);
+    assert.equal(response.headers.get('referrer-policy'), 'no-referrer');
+    assert.equal(sql.some(text => /UPDATE key_deliveries/i.test(text)), true);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('paid bearer request authenticates by digest and atomically consumes one in-period call', async () => {
+  const rawKey = `sg_${'cd'.repeat(24)}`;
+  const statements = [];
+  const db = {
+    prepare(sql) {
+      return { bind(...args) {
+        statements.push({ sql, args });
+        return { async first() {
+          if (/SELECT accounts\.id/i.test(sql)) return { id: 'acct_1', active: 1 };
+          if (/UPDATE accounts/i.test(sql)) return { current_period_calls: 1, wallet_balance: 7 };
+          return null;
+        } };
+      } };
+    },
+  };
+  const response = await request('/mjd', { headers: { Authorization: `Bearer ${rawKey}` } }, {
+    ...env(), PAID_ACCESS_ENABLED: 'true', DB: db,
+  });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('x-ratelimit-limit'), '5000');
+  assert.equal(response.headers.get('x-ratelimit-remaining'), '4999');
+  assert.equal(statements.some(value => /key_digest = \?1/i.test(value.sql)), true);
+  assert.equal(statements.some(value => value.args.includes(rawKey)), false);
+  const allowance = statements.find(value => /UPDATE accounts/i.test(value.sql));
+  assert.match(allowance.sql, /current_period_calls < 5000/i);
+  assert.match(allowance.sql, /\?2 >= period_start AND \?2 < period_end/i);
+  assert.doesNotMatch(allowance.sql, /wallet_balance\s*=/i);
+});
+
+test('malformed paid bearer fails before D1 and authenticated HEAD is quota-neutral', async () => {
+  let updates = 0;
+  const db = {
+    prepare(sql) {
+      return { bind() { return { async first() {
+        if (/SELECT accounts\.id/i.test(sql)) return { id: 'acct_1', active: 1 };
+        if (/UPDATE accounts/i.test(sql)) updates++;
+        return null;
+      } }; } };
+    },
+  };
+  const bindings = { ...env(), PAID_ACCESS_ENABLED: 'true', DB: db };
+  const malformed = await request('/mjd', { headers: { Authorization: 'Bearer nope' } }, bindings);
+  assert.equal(malformed.status, 401);
+  const head = await request('/mjd', { method: 'HEAD', headers: { Authorization: `Bearer sg_${'ef'.repeat(24)}` } }, bindings);
+  assert.equal(head.status, 200);
+  assert.equal(updates, 0);
 });
 
 test('webhook fails closed when transactional billing is not configured', async () => {

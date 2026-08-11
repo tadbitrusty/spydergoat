@@ -50,26 +50,27 @@ export class D1BillingRepository {
       JOIN accounts ON accounts.id = api_credentials.account_id
       WHERE api_credentials.key_digest = ?1
         AND api_credentials.revoked_at IS NULL
+        AND accounts.subscription_status = 'active'
       LIMIT 1
     `).bind(digest).first();
   }
 
-  async consumeAllowance(accountId) {
+  async consumeAllowance(accountId, now) {
     const row = await this.db.prepare(`
       UPDATE accounts
       SET current_period_calls = current_period_calls + 1,
-          wallet_balance = wallet_balance -
-            CASE WHEN current_period_calls >= 5000 THEN 1 ELSE 0 END,
           updated_at = unixepoch()
       WHERE id = ?1
         AND subscription_status = 'active'
-        AND (current_period_calls < 5000 OR wallet_balance >= 1)
+        AND period_start IS NOT NULL AND period_end IS NOT NULL
+        AND ?2 >= period_start AND ?2 < period_end
+        AND current_period_calls < 5000
       RETURNING current_period_calls, wallet_balance
-    `).bind(accountId).first();
-    if (!row) return { allowed: false, reason: 'inactive_or_empty' };
+    `).bind(accountId, now).first();
+    if (!row) return { allowed: false, reason: 'inactive_outside_period_or_exhausted' };
     return {
       allowed: true,
-      tier: row.current_period_calls <= 5000 ? 'paid' : 'wallet',
+      tier: 'paid',
       calls: row.current_period_calls,
       wallet: row.wallet_balance,
     };

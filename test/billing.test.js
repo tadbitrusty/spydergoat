@@ -128,8 +128,7 @@ class AtomicRepository {
   async consumeAllowance() {
     const turn = this._turn = (this._turn || Promise.resolve()).then(() => {
       if (this.calls < 5000) { this.calls++; return { allowed: true, tier: 'paid', calls: this.calls, wallet: this.wallet }; }
-      if (this.wallet > 0) { this.calls++; this.wallet--; return { allowed: true, tier: 'wallet', calls: this.calls, wallet: this.wallet }; }
-      return { allowed: false, reason: 'wallet_empty' };
+      return { allowed: false, reason: 'period_exhausted' };
     });
     return turn;
   }
@@ -142,12 +141,12 @@ class AtomicRepository {
   }
 }
 
-test('concurrent allowance accounting does not lose updates or overspend wallet', async () => {
+test('concurrent Pro allowance accounting stops exactly at 5,000 and never spends parked wallet', async () => {
   const repo = new AtomicRepository({ calls: 4999, wallet: 1 });
   const results = await Promise.all([consumePaidRequest(repo, 'acct_1'), consumePaidRequest(repo, 'acct_1'), consumePaidRequest(repo, 'acct_1')]);
-  assert.deepEqual(results.map(x => x.allowed), [true, true, false]);
-  assert.equal(repo.calls, 5001);
-  assert.equal(repo.wallet, 0);
+  assert.deepEqual(results.map(x => x.allowed), [true, false, false]);
+  assert.equal(repo.calls, 5000);
+  assert.equal(repo.wallet, 1);
 });
 
 test('duplicate subscription event does not regenerate or rotate key material', async () => {
@@ -244,7 +243,8 @@ test('API key authentication hashes credentials and fails closed', async () => {
   const repo = { async findAccountByKeyDigest(value) { lookup = value; return { id: 'acct_1', active: true }; } };
   assert.equal((await authenticateApiKey(repo, raw)).id, 'acct_1');
   assert.equal(lookup, digest);
-  await assert.rejects(() => authenticateApiKey(repo, 'bad'), /invalid api key/i);
+  await assert.rejects(() => authenticateApiKey(repo, 'bad'), /Invalid API key/);
+  await assert.rejects(() => authenticateApiKey({ async findAccountByKeyDigest() { return { id: 'acct_1', active: 0 }; } }, raw), /Invalid API key/);
 });
 
 test('generated plaintext API key never appears in structured logs', async () => {

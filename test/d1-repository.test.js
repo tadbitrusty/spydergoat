@@ -38,18 +38,21 @@ test('D1 checkout failure fails when no pending row transitioned', async () => {
 
 test('D1 allowance consumption is one conditional UPDATE with RETURNING', async () => {
   const log = [];
-  const db = { prepare(sql) { return statement(sql, log, { current_period_calls: 5001, wallet_balance: 0 }); } };
-  const result = await new D1BillingRepository(db).consumeAllowance('acct_1');
+  const db = { prepare(sql) { return statement(sql, log, { current_period_calls: 5000, wallet_balance: 7 }); } };
+  const result = await new D1BillingRepository(db).consumeAllowance('acct_1', 1_500);
   assert.equal(result.allowed, true);
   assert.match(log[0].sql, /UPDATE accounts/i);
-  assert.match(log[0].sql, /wallet_balance = wallet_balance -/i);
+  assert.match(log[0].sql, /current_period_calls < 5000/i);
+  assert.match(log[0].sql, /\?2 >= period_start AND \?2 < period_end/i);
+  assert.doesNotMatch(log[0].sql, /wallet_balance\s*=/i);
   assert.match(log[0].sql, /RETURNING/i);
-  assert.deepEqual(log[0].args, ['acct_1']);
+  assert.deepEqual(log[0].args, ['acct_1', 1_500]);
+  assert.equal(result.wallet, 7);
 });
 
 test('D1 allowance consumption fails closed when no atomic row is available', async () => {
   const db = { prepare(sql) { return statement(sql, [], null); } };
-  assert.deepEqual(await new D1BillingRepository(db).consumeAllowance('acct_1'), { allowed: false, reason: 'inactive_or_empty' });
+  assert.deepEqual(await new D1BillingRepository(db).consumeAllowance('acct_1', 1_500), { allowed: false, reason: 'inactive_outside_period_or_exhausted' });
 });
 
 test('D1 key lookup uses only the credential digest', async () => {
@@ -58,6 +61,7 @@ test('D1 key lookup uses only the credential digest', async () => {
   const account = await new D1BillingRepository(db).findAccountByKeyDigest('digest');
   assert.equal(account.id, 'acct_1');
   assert.match(log[0].sql, /api_credentials/i);
+  assert.match(log[0].sql, /subscription_status = 'active'/i);
   assert.doesNotMatch(log[0].sql, /plaintext|api_key\s*=/i);
 });
 

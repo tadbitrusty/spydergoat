@@ -56,8 +56,8 @@ curl https://spydergoat.com/jd
 | `GET /mjd` | Returns MJD, UTC, Unix timestamp, and source |
 | `GET /jd` | Same as `/mjd` plus Julian Date |
 | `POST /checkout/pro` | Local candidate route; disabled by default and capable of initiating payment only after separately approved enablement/configuration |
-| `GET /success?session_id=...` | Fail-closed paid-access notice; no key disclosure |
-| `POST /webhook` | Fail-closed until transactional billing is configured and migrated |
+| `GET /success?session_id=...` | Gated, no-store, one-time key delivery after authoritative Stripe validation; fail-closed by default |
+| `POST /webhook` | Gated signed Stripe fulfillment/lifecycle endpoint; fail-closed by default |
 
 ## Use Cases
 
@@ -82,7 +82,7 @@ Give apps a tiny edge-hosted clock endpoint without shipping NTP clients, timezo
 | Tier | Price | Limit |
 |---|---:|---|
 | Free | $0 | 1 successful GET per IP / 30 min, shared across `/mjd` and `/jd`; HEAD is quota-neutral |
-| Pro | $4.89/mo | Paused pending transactional billing cutover |
+| Pro | $4.89/mo | 5,000 authenticated successful GETs per proven billing period; paused pending cutover |
 | Wallet | $0.001/request | Top-ups disabled pending account binding and ledger rehearsal |
 
 The intended prices remain recorded, but no paid checkout or wallet links are exposed by the hardened public surface. Local paid-access work remains disabled by default and is not a launch receipt.

@@ -30,7 +30,7 @@ Read in this order:
 
 ## Current local slice
 
-Current paid-access work implements the bounded issuance/delivery and signed lifecycle-webhook seams from Tasks 3–5 of the paid rebuild plan:
+Current paid-access work implements the bounded issuance, delivery, signed lifecycle, and transactional bearer seams from Tasks 3–6 of the paid rebuild plan:
 
 - API keys are generated as `sg_` plus 48 cryptographically random lowercase hex characters.
 - SHA-256 digest is the only persisted authentication authority; D1 also stores an eight-character display suffix.
@@ -43,9 +43,10 @@ Current paid-access work implements the bounded issuance/delivery and signed lif
 - `/webhook` is wired only behind the explicit paid gate, a bounded streaming read that cancels when accumulated body bytes cross 64 KiB, exact raw-body Stripe signature verification, exact `STRIPE_LIVEMODE` configuration, and complete billing/secret configuration.
 - Checkout fulfillment retrieves the authoritative expanded Stripe Session, requires the pre-created pending account, and binds the Stripe customer/subscription and event timestamp before key generation and activation.
 - Subscription renewal, payment-failure, cancellation, and stale-event behavior is idempotent and ordered by authenticated `event.created`; same-second conflicts disable entitlement as `event_conflict` rather than guessing, and renewals reset calls without changing wallet balance.
-- `/success` remains fail-closed, so no Worker route can reveal a key yet.
+- `/success` retrieves and validates the authoritative Stripe Session, then reveals a correctly bound encrypted delivery only after winning one conditional consume; the response is no-store/no-referrer and fails closed on replay, expiry, or mismatch.
+- Paid bearer GETs authenticate only by SHA-256 digest and consume one call with a single conditional D1 `UPDATE ... RETURNING` inside the proven period. The 5,000-call boundary is exact; HEAD is quota-neutral and parked wallet balance is never spent.
 
-This slice does not make paid access available. The packaged configuration keeps paid access disabled, no delivery secret is configured, `/success` cannot reveal a key, and no remote migration was applied.
+This slice does not make paid access available. The packaged configuration keeps paid access disabled, no delivery secret is configured, and no remote migration was applied.
 
 ## Verification at this checkpoint
 
@@ -54,15 +55,12 @@ This slice does not make paid access available. The packaged configuration keeps
 
 ## Remaining paid blockers
 
-1. Independent review and packaging of the current webhook/lifecycle candidate.
+1. Independent review and packaging of the complete local paid runtime candidate.
 2. Complete reviewed versioned D1 migration posture.
-3. Success-route one-time key delivery.
-4. Transactional 5,000-call period boundary.
-5. Bearer authentication and allowance consumption.
-6. Disposable local-D1 end-to-end rehearsal.
-7. Separately authorized Stripe test-mode rehearsal.
-8. Separately authorized production-dark configuration and deploy.
-9. Explicit authorization before accepting real payment.
+3. Disposable local-D1 end-to-end rehearsal.
+4. Separately authorized Stripe test-mode rehearsal.
+5. Separately authorized production-dark configuration and deploy.
+6. Explicit authorization before accepting real payment.
 
 ## Hard stop-lines
 
