@@ -4,6 +4,16 @@ import test from 'node:test';
 
 const html = await readFile(new URL('../index.html', import.meta.url), 'utf8');
 const css = await readFile(new URL('../src/web/styles.css', import.meta.url), 'utf8');
+const wrangler = await readFile(new URL('../wrangler.toml', import.meta.url), 'utf8');
+
+const AEO_PATHS = [
+  '/reference/server-time-api',
+  '/guides/current-timestamp',
+  '/problems/untrusted-client-time',
+  '/problems/server-clock-drift',
+  '/comparisons/client-time-vs-server-time',
+  '/reference/limits-and-non-guarantees',
+];
 
 function relativeLuminance(hex) {
   const channels = hex.match(/[0-9a-f]{2}/gi).map(value => Number.parseInt(value, 16) / 255);
@@ -37,4 +47,15 @@ test('static shell preserves metadata, bootstrap seam, and a useful no-script fa
   assert.match(html, /__SPYDERGOAT_BOOTSTRAP__/);
   assert.match(html, /<noscript>[\s\S]*A compact external time reference for software\.[\s\S]*\/mjd[\s\S]*Paid access is paused[\s\S]*<\/noscript>/i);
   assert.doesNotMatch(html, /buy\.stripe\.com|Get API key|Subscribe/i);
+});
+
+test('production assets route every exact AEO path through the Worker once without losing existing routes', () => {
+  const runWorkerFirst = wrangler.match(/run_worker_first\s*=\s*\[([^\]]+)\]/s)?.[1];
+  assert.ok(runWorkerFirst, 'run_worker_first must exist');
+  const configuredPaths = [...runWorkerFirst.matchAll(/"([^"]+)"/g)].map(match => match[1]);
+  for (const path of AEO_PATHS) assert.equal(configuredPaths.filter(value => value === path).length, 1, path);
+  for (const path of ['/', '/index.html', '/mjd', '/jd', '/checkout/pro', '/success', '/webhook', '/sitemap.xml', '/robots.txt']) {
+    assert.equal(configuredPaths.filter(value => value === path).length, 1, path);
+  }
+  assert.equal(configuredPaths.some(path => path.includes('*')), false);
 });

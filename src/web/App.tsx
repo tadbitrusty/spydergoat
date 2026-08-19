@@ -307,6 +307,20 @@ export default function App() {
           <p className="docs-note">The free endpoint currently allows one request per IP every 30 minutes. <code>/jd</code> returns the same fields plus <code>jd</code>.</p>
         </section>
 
+        <section id="technical-guides" className="content-section guide-links section-wrap">
+          <div className="section-heading"><div><span className="kicker">Technical guides</span><h2>Guides and references</h2></div><p>Choose a focused explanation of the API, its integration patterns, and its limits.</p></div>
+          <nav aria-label="Technical guides and references">
+            <ul>
+              <li><a href="/reference/server-time-api">Server time API reference</a></li>
+              <li><a href="/guides/current-timestamp">Get the current timestamp</a></li>
+              <li><a href="/problems/untrusted-client-time">Handle untrusted client time</a></li>
+              <li><a href="/problems/server-clock-drift">Compare server clock disagreement</a></li>
+              <li><a href="/comparisons/client-time-vs-server-time">Client time versus server time</a></li>
+              <li><a href="/reference/limits-and-non-guarantees">Limits and non-guarantees</a></li>
+            </ul>
+          </nav>
+        </section>
+
         <section id="pricing" className="content-section section-wrap">
           <div className="section-heading"><div><span className="kicker">Access</span><h2>Free endpoint available. Pro access live.</h2></div><p>Subscribe through Stripe for a one-time API-key delivery and 5,000 authenticated requests each monthly billing period.</p></div>
           <div className="pricing-grid">

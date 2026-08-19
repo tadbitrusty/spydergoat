@@ -45,6 +45,26 @@ describe('SpyderGoat v1.1', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('links every technical guide and reference from a semantic discovery group', () => {
+    vi.stubGlobal('fetch', vi.fn());
+    render(<App />);
+
+    const navigation = screen.getByRole('navigation', { name: /technical guides and references/i });
+    const expectedLinks = [
+      ['/reference/server-time-api', /server time api reference/i],
+      ['/guides/current-timestamp', /get the current timestamp/i],
+      ['/problems/untrusted-client-time', /untrusted client time/i],
+      ['/problems/server-clock-drift', /server clock disagreement/i],
+      ['/comparisons/client-time-vs-server-time', /client time versus server time/i],
+      ['/reference/limits-and-non-guarantees', /limits and non-guarantees/i],
+    ] as const;
+    expect(navigation.querySelector('ul')).not.toBeNull();
+    for (const [href, name] of expectedLinks) {
+      expect(screen.getByRole('link', { name })).toHaveAttribute('href', href);
+    }
+    expect(screen.queryByRole('link', { name: /compare server clock drift/i })).not.toBeInTheDocument();
+  });
+
   it('posts the Pro action to the first-party Checkout route and reports failure safely', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: false, json: async () => ({ error: 'checkout_unavailable' }) });
     vi.stubGlobal('fetch', fetchMock);

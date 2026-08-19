@@ -121,6 +121,9 @@ pre { margin: 0; white-space: pre-wrap; }
 .docs-note { grid-column: 2; color: var(--muted); font-size: 13px; line-height: 1.7; }
 .docs-note code { color: var(--amber); }
 
+.guide-links ul { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 28px; margin: 0; padding-left: 20px; }
+.guide-links a { display: inline-flex; min-height: 44px; align-items: center; color: var(--amber-light); text-underline-offset: 5px; }
+
 .pricing-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
 .price-card { min-height: 340px; display: flex; flex-direction: column; padding: 28px; border: 1px solid var(--line); background: var(--surface); }
 .price-card.available { border-top: 2px solid var(--amber); }
@@ -184,6 +187,7 @@ pre { margin: 0; white-space: pre-wrap; }
   .case-row pre { grid-column: 1; margin-top: 14px; }
   .docs-section { gap: 30px; }
   .code-window pre { min-height: 250px; padding: 18px; font-size: 12px; }
+  .guide-links ul { grid-template-columns: 1fr; }
   .site-footer { grid-template-columns: 1fr; gap: 15px; padding-block: 35px; }
 }
 

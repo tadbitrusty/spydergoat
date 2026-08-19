@@ -3,6 +3,8 @@ import { authenticateApiKey, consumePaidRequest, createProCheckout, processStrip
 import { StripeBillingClient } from '../billing/stripe-client.js';
 import { verifyStripeSignature } from '../billing/stripe.js';
 import { claimAndDecryptApiKey } from '../billing/key-delivery.js';
+import { AEO_PAGES, AEO_PAGES_BY_ROUTE } from '../content/aeo-pages.js';
+import { renderAeoPage } from '../content/render-aeo-page.js';
 
 const RATE_LIMIT_MS = 1_800_000;
 const MAX_WEBHOOK_BYTES = 65_536;
@@ -139,6 +141,18 @@ function homepage(now) {
 
 function htmlResponse(body, method) {
   return new Response(method === 'HEAD' ? null : body, { headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', ...SECURITY } });
+}
+
+function escapeXml(value) {
+  return String(value).replace(/[&<>"']/g, character => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;',
+  })[character]);
+}
+
+function sitemapXml() {
+  const canonicals = ['https://spydergoat.com/', ...AEO_PAGES.map(page => page.canonical)];
+  const urls = canonicals.map(canonical => `<url><loc>${escapeXml(canonical)}</loc></url>`).join('');
+  return `<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls}</urlset>`;
 }
 
 function paidCatalog(env) {
@@ -365,6 +379,7 @@ async function handle(request, env) {
   const path = url.pathname;
   const method = request.method;
   const isApi = path === '/mjd' || path === '/jd';
+  const isContent = Object.hasOwn(AEO_PAGES_BY_ROUTE, path);
 
   if (method === 'OPTIONS') {
     if (!isApi) return new Response(null, { status: 405, headers: { Allow: 'GET, HEAD' } });
@@ -387,8 +402,9 @@ async function handle(request, env) {
   }
   if ((path === '/' || path === '/index.html') && env.ASSETS) return assetHomepage(request, env);
   if (path === '/' || path === '/index.html') return htmlResponse(homepage(Date.now()), method);
+  if (isContent) return htmlResponse(renderAeoPage(path), method);
   if (path === '/robots.txt') return new Response(method === 'HEAD' ? null : 'User-agent: *\nAllow: /\nSitemap: https://spydergoat.com/sitemap.xml\n', { headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
-  if (path === '/sitemap.xml') return new Response(method === 'HEAD' ? null : '<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>https://spydergoat.com/</loc></url></urlset>', { headers: { 'Content-Type': 'application/xml; charset=utf-8' } });
+  if (path === '/sitemap.xml') return new Response(method === 'HEAD' ? null : sitemapXml(), { headers: { 'Content-Type': 'application/xml; charset=utf-8' } });
   if (isApi) {
     if (request.headers.has('Authorization')) return handlePaidApi(request, env, path, method);
     if (method === 'HEAD') return new Response(null, { headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...API_CORS } });

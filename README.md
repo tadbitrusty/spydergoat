@@ -59,6 +59,33 @@ curl https://spydergoat.com/jd
 | `GET /success?session_id=...` | Gated, no-store, one-time key delivery after authoritative Stripe validation; fail-closed by default |
 | `POST /webhook` | Gated signed Stripe fulfillment/lifecycle endpoint; fail-closed by default |
 
+## Technical content pages
+
+The published AEO layer defines six Worker-first technical-content routes:
+
+- `/reference/server-time-api`
+- `/guides/current-timestamp`
+- `/problems/untrusted-client-time`
+- `/problems/server-clock-drift`
+- `/comparisons/client-time-vs-server-time`
+- `/reference/limits-and-non-guarantees`
+
+The Cloudflare Worker serves server-visible semantic HTML for each route. Every page has unique metadata and a canonical URL, with visible provenance or references where factual claims require them. The sitemap and homepage provide discovery paths. This architecture does not guarantee indexing, ranking, citation, traffic, API adoption, or conversion.
+
+Verify the candidate locally with the repository scripts:
+
+```bash
+npm test
+npm run check
+npm run build
+```
+
+After the build, run the production-shaped local Worker and static-assets configuration without deploying:
+
+```bash
+npx wrangler dev --port 8787
+```
+
 ## Use Cases
 
 ### AI agents
