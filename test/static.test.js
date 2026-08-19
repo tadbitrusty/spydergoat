@@ -41,12 +41,16 @@ test('interactive control boundaries meet 3:1 non-text contrast', () => {
   assert.match(css, /\.copy-button\s*\{[^}]*border:\s*1px solid var\(--control-border\)/s);
 });
 
-test('static shell preserves metadata, bootstrap seam, and a useful no-script fallback', () => {
+test('static shell preserves metadata, bootstrap seam, and a current crawlable no-script fallback', () => {
   assert.match(html, /<link rel="canonical" href="https:\/\/spydergoat\.com\/"/);
   assert.match(html, /id="spydergoat-bootstrap"/);
   assert.match(html, /__SPYDERGOAT_BOOTSTRAP__/);
-  assert.match(html, /<noscript>[\s\S]*A compact external time reference for software\.[\s\S]*\/mjd[\s\S]*Paid access is paused[\s\S]*<\/noscript>/i);
-  assert.doesNotMatch(html, /buy\.stripe\.com|Get API key|Subscribe/i);
+  assert.match(html, /<noscript>[\s\S]*A compact external time reference for software\.[\s\S]*\/mjd[\s\S]*Pro access live[\s\S]*<\/noscript>/i);
+  for (const path of AEO_PATHS) {
+    assert.equal((html.match(new RegExp(`href=["']${path}["']`, 'g')) || []).length, 1, path);
+  }
+  assert.doesNotMatch(html, /Paid access is paused|Billing and API-key access remain unavailable during the transactional rebuild/i);
+  assert.doesNotMatch(html, /buy\.stripe\.com|Get API key/i);
 });
 
 test('production assets route every exact AEO path through the Worker once without losing existing routes', () => {

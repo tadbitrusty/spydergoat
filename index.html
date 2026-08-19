@@ -22,8 +22,23 @@
         <h1>A compact external time reference for software.</h1>
         <p>Get server-derived MJD, UTC, and Unix time as JSON.</p>
         <p><a href="/mjd">Open /mjd</a> · <a href="/jd">Open /jd</a></p>
-        <h2>Free endpoint available. Paid access is paused.</h2>
-        <p>The free endpoint allows one request per IP every 30 minutes. Billing and API-key access remain unavailable during the transactional rebuild.</p>
+        <section aria-labelledby="technical-guides-title">
+          <h2 id="technical-guides-title">Technical guides and references</h2>
+          <nav aria-label="Technical guides and references">
+            <ul>
+              <li><a href="/reference/server-time-api">Server time API reference</a></li>
+              <li><a href="/guides/current-timestamp">Get the current timestamp</a></li>
+              <li><a href="/problems/untrusted-client-time">Handle untrusted client time</a></li>
+              <li><a href="/problems/server-clock-drift">Compare server clock disagreement</a></li>
+              <li><a href="/comparisons/client-time-vs-server-time">Client time versus server time</a></li>
+              <li><a href="/reference/limits-and-non-guarantees">Limits and non-guarantees</a></li>
+            </ul>
+          </nav>
+        </section>
+        <section aria-labelledby="access-title">
+          <h2 id="access-title">Free endpoint available. Pro access live.</h2>
+          <p>The free endpoint allows one request per IP every 30 minutes. Pro provides 5,000 authenticated MJD/JD requests per monthly billing period, with one-time API-key delivery after Stripe payment.</p>
+        </section>
       </main>
     </noscript>
     <div id="root"></div>
