@@ -3,7 +3,7 @@
 **Date:** 2026-08-23
 **Branch:** `feature/paid-access-v1`
 **Baseline:** `cd07d83cf549c17d91887bf8f84529c40c49f765`
-**Posture:** Local verified candidate; not committed, pushed, or deployed
+**Posture:** Shipped and live
 
 ## Why
 
@@ -55,17 +55,19 @@ Visual evidence is outside the repo at:
 - `/home/adam/Desktop/spydergoat-hero-review-2026-08-23/01-desktop-1280x900.png`
 - `/home/adam/Desktop/spydergoat-hero-review-2026-08-23/02-mobile-390x844.png`
 - `/home/adam/Desktop/spydergoat-hero-review-2026-08-23/03-small-mobile-320x568.png`
+- `/home/adam/Desktop/spydergoat-hero-review-2026-08-23/04-live-mobile-after-deploy.png`
 
-## Held boundaries
+## Publication receipts
 
-- No commit
-- No push
-- No deploy/publication
-- No Cloudflare account or token-permission change
-- No DNS, Stripe, D1, KV, secret, billing, or customer-data mutation
+- Adam authorized shipment in-chat with “Ship it.”
+- Code commit: `174951cfa8890394396601b574c904c1f61cbb57` (`feat(web): sharpen homepage sales path`).
+- Pushed to `origin/feature/paid-access-v1`; local and remote SHAs matched with ahead/behind `0 0`.
+- Cloudflare production deployment succeeded with Version ID `2dcd9086-f0fa-4864-8104-b0f3adbb61b2`.
+- Live homepage returned HTTP 200 with the revised hero and expected built asset `index-B-E80J6x.js`.
+- Live `/mjd` returned HTTP 200 with `mjd`, `source`, `unix`, and `utc`; source was `server`.
+- Post-deploy 390 × 844 screenshot confirmed both CTAs above-fold without clipping or an error/interstitial.
+- No Cloudflare token-permission, analytics configuration, DNS, Stripe, D1, KV, secret, billing, or customer-data mutation was made.
 
-## Next live gates
+## Remaining measurement gate
 
-1. Adam visually approves the two review images.
-2. Adam separately authorizes commit/push/deploy of the exact candidate.
-3. Cloudflare analytics-read permission is added manually only if Adam wants Mim to retrieve and interpret traffic directly; dashboard viewing does not require changing the Worker candidate.
+Cloudflare analytics-read permission is needed only if Adam wants Mim to retrieve and interpret traffic directly. The live dashboard and automatically injected Web Analytics beacon do not depend on a Worker change.
