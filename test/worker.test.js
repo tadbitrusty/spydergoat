@@ -82,6 +82,12 @@ test('static shell fails closed when the server bootstrap marker is missing', as
 
 test('homepage offers one intentional API calibration and interpolates locally without polling', async () => {
   const html = await (await request('/')).text();
+  assert.match(html, /Timestamp receipts for software events\./);
+  assert.match(html, /When logs, agents, webhooks, or databases disagree/);
+  assert.match(html, /Try the free endpoint/);
+  assert.doesNotMatch(html, /Get Pro — \$4\.89\/month/);
+  assert.match(html, /Pro checkout is temporarily unavailable while the interactive site is offline/);
+  assert.doesNotMatch(html, /paid access paused|Not currently available/);
   assert.match(html, /fetch\('\/mjd'/);
   assert.match(html, /id="calibrate"/);
   assert.match(html, /addEventListener\('click'/);

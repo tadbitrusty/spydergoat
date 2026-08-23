@@ -45,7 +45,7 @@ test('static shell preserves metadata, bootstrap seam, and a current crawlable n
   assert.match(html, /<link rel="canonical" href="https:\/\/spydergoat\.com\/"/);
   assert.match(html, /id="spydergoat-bootstrap"/);
   assert.match(html, /__SPYDERGOAT_BOOTSTRAP__/);
-  assert.match(html, /<noscript>[\s\S]*A compact external time reference for software\.[\s\S]*\/mjd[\s\S]*Pro access live[\s\S]*<\/noscript>/i);
+  assert.match(html, /<noscript>[\s\S]*Timestamp receipts for software events\.[\s\S]*\/mjd[\s\S]*Pro access live[\s\S]*<\/noscript>/i);
   for (const path of AEO_PATHS) {
     assert.equal((html.match(new RegExp(`href=["']${path}["']`, 'g')) || []).length, 1, path);
   }

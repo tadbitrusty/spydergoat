@@ -28,7 +28,17 @@ describe('SpyderGoat v1.1', () => {
     expect(brandLogo).toHaveAttribute('src', '/spydergoat-original.png');
     expect(brandLogo).toHaveAttribute('width', '40');
     expect(brandLogo).toHaveAttribute('height', '40');
-    expect(screen.getByRole('heading', { level: 1, name: /external time reference/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: /timestamp receipts for software events/i })).toBeInTheDocument();
+    expect(screen.getByText(/when logs, agents, webhooks, or databases disagree/i)).toBeInTheDocument();
+    const heroFreeAction = screen.getByRole('link', { name: /^try free endpoint$/i });
+    const heroProAction = screen.getByRole('button', { name: /^get pro · \$4\.89\/mo$/i });
+    expect(heroFreeAction).toHaveTextContent(/^Try free endpoint$/i);
+    expect(heroProAction).toHaveTextContent(/^Get Pro · \$4\.89\/mo$/i);
+    expect(heroFreeAction).not.toHaveAttribute('aria-label');
+    expect(heroProAction).not.toHaveAttribute('aria-label');
+    expect(heroFreeAction).toHaveAttribute('href', '/mjd');
+    expect(heroProAction.closest('form')).toHaveAttribute('action', '/checkout/pro');
+    expect(heroProAction.compareDocumentPosition(screen.getByRole('region', { name: /current time receipt/i })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getAllByText(/browser preview/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/browser-derived preview/i)).toBeInTheDocument();
     expect(screen.queryByText(/server-derived today/i)).not.toBeInTheDocument();
@@ -38,7 +48,7 @@ describe('SpyderGoat v1.1', () => {
     expect(screen.getByRole('heading', { name: /where a shared reference helps/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /whole public api/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /pro access live/i })).toBeInTheDocument();
-    const checkoutButton = screen.getByRole('button', { name: /get pro/i });
+    const checkoutButton = screen.getByRole('button', { name: /^get pro$/i });
     expect(checkoutButton.closest('form')).toHaveAttribute('action', '/checkout/pro');
     expect(checkoutButton.closest('form')).toHaveAttribute('method', 'post');
     expect(document.querySelector('a[href*="stripe"]')).not.toBeInTheDocument();
@@ -71,7 +81,7 @@ describe('SpyderGoat v1.1', () => {
     const user = userEvent.setup();
 
     render(<App />);
-    await user.click(screen.getByRole('button', { name: /get pro/i }));
+    await user.click(screen.getByRole('button', { name: /^get pro$/i }));
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledWith('/checkout/pro', {

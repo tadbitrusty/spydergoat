@@ -230,10 +230,17 @@ export default function App() {
       <main id="content">
         <header id="top" className="hero section-wrap">
           <div className="hero-grid" aria-hidden="true" />
-          <div className="eyebrow"><span className="signal-dot" /> Modified Julian Date · Time API</div>
+          <div className="eyebrow"><span className="signal-dot" /> External timestamp receipt · Time API</div>
           <div className="hero-copy">
-            <h1>A compact external time reference for software.</h1>
-            <p>Server-derived MJD, UTC, and Unix time in one small JSON response—for agents, audit trails, science tooling, and systems that need a shared temporal receipt.</p>
+            <h1>Timestamp receipts for software events.</h1>
+            <p>When logs, agents, webhooks, or databases disagree about when something happened, SpyderGoat returns an external timestamp in UTC, Unix, and MJD.</p>
+            <p className="hero-proof">No SDK. No dashboard. One small JSON response.</p>
+            <div className="conversion-actions" aria-label="SpyderGoat access">
+              <a className="button primary" href="/mjd">Try free endpoint</a>
+              <form action="/checkout/pro" method="post" onSubmit={startCheckout}>
+                <button className="button secondary" type="submit" disabled={checkoutLoading}>{checkoutLoading ? 'Opening…' : 'Get Pro · $4.89/mo'}</button>
+              </form>
+            </div>
           </div>
 
           <section className="clock-panel" aria-label="Current time receipt">
@@ -325,11 +332,13 @@ export default function App() {
           <div className="section-heading"><div><span className="kicker">Access</span><h2>Free endpoint available. Pro access live.</h2></div><p>Subscribe through Stripe for a one-time API-key delivery and 5,000 authenticated requests each monthly billing period.</p></div>
           <div className="pricing-grid">
             <article className="price-card available"><div className="price-top"><span>Free</span><b>Available</b></div><strong>$0</strong><p>One request per IP every 30 minutes. No signup.</p><a className="button primary" href="/mjd">Use /mjd</a></article>
-            <article className="price-card available"><div className="price-top"><span>Pro</span><b>Available</b></div><strong>$4.89<small>/month</small></strong><p>5,000 authenticated MJD/JD requests per monthly billing period. Your API key is shown once after payment.</p><form action="/checkout/pro" method="post" onSubmit={startCheckout}><button className="button primary" type="submit" disabled={checkoutLoading}>{checkoutLoading ? 'Opening…' : 'Get Pro'}</button></form><output className="checkout-status" aria-live="polite">{checkoutStatus}</output></article>
+            <article className="price-card available"><div className="price-top"><span>Pro</span><b>Available</b></div><strong>$4.89<small>/month</small></strong><p>5,000 authenticated MJD/JD requests per monthly billing period. Your API key is shown once after payment.</p><form action="/checkout/pro" method="post" onSubmit={startCheckout}><button className="button primary" type="submit" disabled={checkoutLoading}>{checkoutLoading ? 'Opening…' : 'Get Pro'}</button></form></article>
             <article className="price-card paused"><div className="price-top"><span>Wallet</span><b>Paused</b></div><strong>$0.001<small>/request</small></strong><p>Top-ups remain disabled until credits have deterministic account binding and ledger receipts.</p></article>
           </div>
         </section>
       </main>
+
+      {checkoutStatus && <output className="checkout-status checkout-toast" aria-live="polite">{checkoutStatus}</output>}
 
       <footer className="site-footer section-wrap"><div className="brand"><BrandMark /><span>spydergoat</span></div><p>Server-derived MJD, UTC, and Unix time over HTTP.</p><a href="#top">Back to top ↑</a></footer>
     </div>
