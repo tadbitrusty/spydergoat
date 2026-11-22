@@ -12,7 +12,8 @@ test('D1 allowance consumption is one conditional UPDATE with RETURNING', async 
   const result = await new D1BillingRepository(db).consumeAllowance('acct_1');
   assert.equal(result.allowed, true);
   assert.match(log[0].sql, /UPDATE accounts/i);
-  assert.match(log[0].sql, /wallet_balance = wallet_balance -/i);
+  assert.match(log[0].sql, /current_period_calls < 5000/i);
+  assert.match(log[0].sql, /subscription_status = 'past_due'/i);
   assert.match(log[0].sql, /RETURNING/i);
   assert.deepEqual(log[0].args, ['acct_1']);
 });
@@ -37,8 +38,22 @@ test('D1 provisioning upserts the bound account before marking the event process
     prepare(text) { sql.push(text); return { bind() { return { text }; } }; },
     async batch(statements) { return statements.map(() => ({ success: true, meta: { changes: 1 } })); },
   };
-  const result = await new D1BillingRepository(db).applyStripeEventOnce('evt_1', { kind: 'provision', accountId: 'acct_1', customerId: 'cus_1' });
+  const result = await new D1BillingRepository(db).applyStripeEventOnce('evt_1', {
+    kind: 'provision', accountId: 'acct_1', customerId: 'cus_1', subscriptionId: 'sub_1', checkoutSessionId: 'cs_1',
+    credential: { id: 'cred_1', digest: 'digest', suffix: 'suffix', encryptedKey: 'ciphertext', iv: 'iv', nonceDigest: 'nonce' },
+  });
   assert.equal(result.replayed, false);
   assert.match(sql.join('\n'), /INSERT INTO accounts/i);
   assert.match(sql.join('\n'), /ON CONFLICT\s*\(id\) DO UPDATE/i);
+});
+
+test('D1 grace expiry revokes credentials and accounts in one batch', async () => {
+  const sql = [];
+  const db = {
+    prepare(text) { sql.push(text); return { bind() { return { text }; } }; },
+    async batch() { return [{ success: true, meta: { changes: 2 } }, { success: true, meta: { changes: 1 } }]; },
+  };
+  assert.equal(await new D1BillingRepository(db).revokeExpiredGrace(1234), 1);
+  assert.match(sql.join('\n'), /grace_until <=/i);
+  assert.match(sql.join('\n'), /subscription_status = 'revoked'/i);
 });

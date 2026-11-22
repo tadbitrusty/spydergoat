@@ -1,7 +1,16 @@
-const RATE_LIMIT_MS = 1_800_000;
+import { createSignedReceipt, publicKeys, purgeExpiredReceiptHashes, storeReceiptHash, verifyReceipt } from '../receipts.js';
+import { D1BillingRepository } from '../billing/d1-repository.js';
+import { hashApiKey, authenticateApiKey, findPaidUnprovisionedSessions, processStripeEvent, validateCheckoutSession } from '../billing/service.js';
+import { createCheckoutSession, listCompletedCheckoutSessions, retrieveCheckoutSession, verifyStripeSignature } from '../billing/stripe.js';
+import { decryptApiKey, encryptApiKey, generateApiKey } from '../billing/key-delivery.js';
+
+const FREE_DAILY_LIMIT = 10;
+const PRO_MONTHLY_LIMIT = 5000;
+const GLOBAL_RECEIPT_DAILY_LIMIT = 10_000;
+const PUBLIC_METADATA_MINUTE_LIMIT = 60;
 const API_CORS = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, HEAD, POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 };
 const SECURITY = {
@@ -36,14 +45,103 @@ function clientIP(request) {
 
 async function checkFreeRateLimit(request, env) {
   if (!env.SPYDERGOAT_KV) return { allowed: true, retryAfter: 0 };
-  const key = `rate:free:${clientIP(request)}`;
   const now = Date.now();
-  const previous = Number(await env.SPYDERGOAT_KV.get(key));
-  if (Number.isFinite(previous) && now - previous < RATE_LIMIT_MS) {
-    return { allowed: false, retryAfter: Math.ceil((RATE_LIMIT_MS - (now - previous)) / 1000) };
+  const day = new Date(now).toISOString().slice(0, 10);
+  const key = `rate:free:${day}:${clientIP(request)}`;
+  const count = Number(await env.SPYDERGOAT_KV.get(key)) || 0;
+  const nextDay = Date.parse(`${day}T00:00:00.000Z`) + 86_400_000;
+  const retryAfter = Math.max(1, Math.ceil((nextDay - now) / 1000));
+  if (count >= FREE_DAILY_LIMIT) return { allowed: false, retryAfter };
+  await env.SPYDERGOAT_KV.put(key, String(count + 1), { expirationTtl: retryAfter + 86_400 });
+  return { allowed: true, retryAfter: 0, remaining: FREE_DAILY_LIMIT - count - 1 };
+}
+
+async function checkKvLimit(env, key, limit, expirationTtl) {
+  if (!env.SPYDERGOAT_KV) return { allowed: true, remaining: limit };
+  const count = Number(await env.SPYDERGOAT_KV.get(key)) || 0;
+  if (count >= limit) return { allowed: false, remaining: 0 };
+  await env.SPYDERGOAT_KV.put(key, String(count + 1), { expirationTtl });
+  return { allowed: true, remaining: limit - count - 1 };
+}
+
+async function checkReceiptGlobalLimit(env) {
+  const day = new Date().toISOString().slice(0, 10);
+  return checkKvLimit(env, `rate:receipts:global:${day}`, GLOBAL_RECEIPT_DAILY_LIMIT, 172_800);
+}
+
+async function checkPublicMetadataLimit(request, env) {
+  const minute = Math.floor(Date.now() / 60_000);
+  return checkKvLimit(env, `rate:metadata:${minute}:${clientIP(request)}`, PUBLIC_METADATA_MINUTE_LIMIT, 120);
+}
+
+function paidEnabled(env) { return String(env.PAID_ENABLED || 'false').toLowerCase() === 'true'; }
+
+async function paidAccess(request, env) {
+  const header = request.headers.get('Authorization') || '';
+  if (!header.startsWith('Bearer ') || !paidEnabled(env)) return { paid: false };
+  const repository = env.BILLING_REPOSITORY || new D1BillingRepository(env.DB);
+  let account;
+  try {
+    account = await authenticateApiKey(repository, header.slice(7));
+  } catch {
+    return { paid: false };
   }
-  await env.SPYDERGOAT_KV.put(key, String(now), { expirationTtl: 1800 });
-  return { allowed: true, retryAfter: 0 };
+  try {
+    const allowance = await repository.consumeAllowance(account.id);
+    return { paid: true, allowed: allowance.allowed, allowance };
+  } catch {
+    return { paid: true, allowed: false, allowance: { reason: 'meter_unavailable' } };
+  }
+}
+
+function paidDenied(paid) {
+  return paid.allowance?.reason === 'meter_unavailable'
+    ? json({ error: 'meter_unavailable' }, 503, API_CORS)
+    : json({ error: 'monthly_cap', message: `Pro monthly cap: ${PRO_MONTHLY_LIMIT} requests` }, 429, API_CORS);
+}
+
+async function readJson(request, maxBytes = 16_384) {
+  if (!request.headers.get('content-type')?.toLowerCase().startsWith('application/json')) throw new Error('JSON content type required');
+  const declared = Number(request.headers.get('content-length') || 0);
+  if (declared > maxBytes) throw new Error('Request body too large');
+  const text = await request.text();
+  if (new TextEncoder().encode(text).length > maxBytes) throw new Error('Request body too large');
+  return JSON.parse(text);
+}
+
+function billingCatalog(env) {
+  return {
+    subscription: {
+      mode: 'subscription', product: env.STRIPE_PRO_PRODUCT_ID,
+      price: env.STRIPE_PRO_PRICE_ID, currency: 'usd', amount: 500,
+    },
+  };
+}
+
+function validateCheckoutSessionForResend(session, env) {
+  return validateCheckoutSession(session, billingCatalog(env), { livemode: false });
+}
+
+async function issueCredential(env) {
+  const raw = generateApiKey();
+  const encrypted = await encryptApiKey(raw, env.KEY_DELIVERY_SECRET);
+  return { id: crypto.randomUUID(), digest: await hashApiKey(raw), suffix: raw.slice(-8),
+    nonceDigest: await hashApiKey(encrypted.iv), ...encrypted };
+}
+
+function adminAuthorized(request, env) {
+  const expected = String(env.BILLING_ADMIN_TOKEN || '');
+  return expected.length >= 32 && request.headers.get('X-Admin-Token') === expected;
+}
+
+export async function runDailyBillingCheck(env, logger = console, nowSeconds = Math.floor(Date.now() / 1000)) {
+  const repository = env.BILLING_REPOSITORY || new D1BillingRepository(env.DB);
+  const revoked = await repository.revokeExpiredGrace(nowSeconds);
+  const sessions = await listCompletedCheckoutSessions(env, nowSeconds - 2 * 86_400);
+  const missing = await findPaidUnprovisionedSessions(repository, sessions, billingCatalog(env), { livemode: false });
+  for (const sessionId of missing) logger.error?.('paid_checkout_unprovisioned', { checkoutSessionId: sessionId });
+  logger.info?.('daily_billing_check', { paidUnprovisioned: missing.length, graceRevoked: revoked });
+  return { missing, revoked };
 }
 
 function json(value, status = 200, headers = {}) {
@@ -124,8 +222,8 @@ function homepage(now) {
   "utc": "${initial.utc}",
   "unix": ${initial.unix},
   "source": "server"
-}</pre><p class="sub">The free endpoint currently allows one request per IP every 30 minutes. <code>/jd</code> returns the same fields plus <code>jd</code>.</p></div></section>
-<section id="pricing"><div class="wrap"><div class="kicker">Access</div><h2>Free endpoint available; paid access paused</h2><div class="pricing"><div class="panel"><h3>Free</h3><b>$0</b><p>One request per IP every 30 minutes. No signup.</p><a href="/mjd">Use /mjd</a></div><div class="panel paused"><h3>Pro · $4.89/month</h3><span class="badge">Not currently available</span><p>Paid access is paused while transactional accounting, replay protection, and key delivery are hardened.</p></div><div class="panel paused"><h3>Wallet · $0.001/request</h3><span class="badge">Top-ups disabled</span><p>No payment link is exposed until account binding and ledger behavior pass supervised rehearsal.</p></div></div></div></section></main>
+}</pre><p class="sub">The best-effort free tier shares 10 requests per IP per UTC day across <code>/mjd</code>, <code>/jd</code>, and <code>/receipt</code>. Rate-limit IP keys remain in KV for roughly 48 hours.</p></div></section>
+<section id="pricing"><div class="wrap"><div class="kicker">Access</div><h2>Free endpoint available; paid access paused by default</h2><div class="pricing"><div class="panel"><h3>Free</h3><b>$0</b><p>Best-effort 10 shared requests per IP per UTC day. No signup.</p><a href="/mjd">Use /mjd</a></div><div class="panel paused"><h3>Pro · $5/month</h3><span class="badge">Feature gated</span><p>5,000 requests per billing month. Checkout requires PAID_ENABLED.</p></div></div></div></section></main>
 <footer><div class="wrap">Spydergoat · server-derived MJD, UTC, and Unix time over HTTP.</div></footer>
 <script>(function(){var mjdNode=document.getElementById('mjd'),utcNode=document.getElementById('utc'),status=document.getElementById('clock-status'),ruler=document.getElementById('ruler-now'),calibrate=document.getElementById('calibrate');var baseMjd=${initial.mjd},basePerf=performance.now(),baseUtc=Date.parse('${initial.utc}');function draw(){var elapsed=performance.now()-basePerf;var value=baseMjd+elapsed/86400000;mjdNode.textContent=value.toFixed(8);var date=new Date(baseUtc+elapsed);utcNode.textContent=date.toISOString();utcNode.dateTime=date.toISOString();ruler.textContent='MJD '+Math.floor(value)}calibrate.addEventListener('click',function(){calibrate.disabled=true;status.textContent='Calibrating once from /mjd…';fetch('/mjd',{headers:{Accept:'application/json'}}).then(function(response){if(!response.ok)throw new Error('status');return response.json()}).then(function(data){if(!Number.isFinite(data.mjd)||typeof data.utc!=='string')throw new Error('shape');baseMjd=data.mjd;baseUtc=Date.parse(data.utc);basePerf=performance.now();status.textContent='Calibrated once from /mjd; display advances locally.';draw()}).catch(function(){status.textContent='Live calibration unavailable; showing the server-rendered value advanced locally.'}).finally(function(){calibrate.disabled=false})});draw();setInterval(draw,window.matchMedia('(prefers-reduced-motion: reduce)').matches?2000:1000)})();</script></body></html>`;
 }
@@ -138,32 +236,137 @@ async function handle(request, env) {
   const url = new URL(request.url);
   const path = url.pathname;
   const method = request.method;
-  const isApi = path === '/mjd' || path === '/jd';
+  const isApi = ['/mjd', '/jd', '/receipt', '/verify', '/keys'].includes(path);
 
   if (method === 'OPTIONS') {
     if (!isApi) return new Response(null, { status: 405, headers: { Allow: 'GET, HEAD' } });
     return new Response(null, { status: 204, headers: API_CORS });
   }
+  if (path === '/checkout') {
+    if (method !== 'POST') return json({ error: 'method_not_allowed' }, 405, { Allow: 'POST' });
+    if (!paidEnabled(env)) return json({ error: 'paid_disabled' }, 503);
+    try {
+      const session = await createCheckoutSession(env, crypto.randomUUID());
+      return new Response(null, { status: 303, headers: { Location: session.url, 'Cache-Control': 'no-store' } });
+    } catch {
+      return json({ error: 'checkout_unavailable' }, 503);
+    }
+  }
   if (path === '/webhook') {
     if (method !== 'POST') return json({ error: 'method_not_allowed' }, 405, { Allow: 'POST' });
-    return json({ error: 'billing_not_configured' }, 503);
+    if (!paidEnabled(env)) return json({ error: 'paid_disabled' }, 503);
+    const payload = await request.text();
+    const verification = await verifyStripeSignature(payload, request.headers.get('stripe-signature'), env.STRIPE_WEBHOOK_SECRET);
+    if (!verification.valid) return json({ error: 'invalid_signature' }, 400);
+    let event;
+    try { event = JSON.parse(payload); } catch { return json({ error: 'invalid_json' }, 400); }
+    try {
+      const repository = env.BILLING_REPOSITORY || new D1BillingRepository(env.DB);
+      await processStripeEvent(repository, event, billingCatalog(env), {
+        livemode: false, graceDays: 7, issueCredential: () => issueCredential(env),
+        retrieveCheckoutSession: sessionId => retrieveCheckoutSession(env, sessionId),
+      });
+      return json({ received: true });
+    } catch {
+      return json({ error: 'event_rejected' }, 400);
+    }
+  }
+  if (path === '/billing/key-resend') {
+    if (method !== 'POST') return json({ error: 'method_not_allowed' }, 405, { Allow: 'POST' });
+    if (!paidEnabled(env) || !adminAuthorized(request, env)) return json({ error: 'not_found' }, 404);
+    let body;
+    try { body = await readJson(request); } catch { return json({ error: 'invalid_request' }, 400); }
+    if (!/^cs_[A-Za-z0-9_]+$/.test(String(body?.checkout_session_id || ''))) return json({ error: 'invalid_session' }, 400);
+    try {
+      const session = await retrieveCheckoutSession(env, body.checkout_session_id);
+      const validation = validateCheckoutSessionForResend(session, env);
+      if (!validation.ok) return json({ error: 'session_not_eligible' }, 409);
+      const repository = env.BILLING_REPOSITORY || new D1BillingRepository(env.DB);
+      await repository.replaceCredentialForCheckout({
+        accountId: validation.accountId, checkoutSessionId: session.id, credential: await issueCredential(env),
+      });
+      return json({ resent: true, delivery_path: `/success?session_id=${encodeURIComponent(session.id)}` });
+    } catch { return json({ error: 'key_resend_unavailable' }, 503); }
+  }
+  if (path === '/receipt') {
+    if (method !== 'POST') return json({ error: 'method_not_allowed' }, 405, { Allow: 'POST, OPTIONS' });
+    let body;
+    try { body = await readJson(request); } catch (error) { return json({ error: 'invalid_request', message: error.message }, 400, API_CORS); }
+    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).join(',') !== 'sha256' || !/^[0-9a-fA-F]{64}$/.test(body.sha256)) {
+      return json({ error: 'invalid_hash', message: 'Only {sha256: 64-hex} is accepted' }, 400, API_CORS);
+    }
+    const globalLimit = await checkReceiptGlobalLimit(env);
+    if (!globalLimit.allowed) return json({ error: 'service_daily_cap', message: 'Receipt service daily cap reached' }, 429, API_CORS);
+    const paid = await paidAccess(request, env);
+    if (paid.paid && !paid.allowed) return paidDenied(paid);
+    if (!paid.paid) {
+      const limit = await checkFreeRateLimit(request, env);
+      if (!limit.allowed) return json({ error: 'rate_limited', message: 'Free tier: 10 receipts per UTC day', retry_after: limit.retryAfter }, 429, { 'Retry-After': String(limit.retryAfter), ...API_CORS });
+    }
+    try {
+      const receipt = await createSignedReceipt(body.sha256.toLowerCase(), env);
+      await storeReceiptHash(env.DB, receipt, env.RECEIPT_RETENTION_DAYS || 90);
+      return json(receipt, 200, API_CORS);
+    } catch {
+      return json({ error: 'signing_unavailable' }, 503, API_CORS);
+    }
+  }
+  if (path === '/verify') {
+    if (!['GET', 'POST'].includes(method)) return json({ error: 'method_not_allowed' }, 405, { Allow: 'GET, POST, OPTIONS' });
+    if (!(await checkPublicMetadataLimit(request, env)).allowed) return json({ error: 'rate_limited' }, 429, API_CORS);
+    let receipt;
+    try {
+      receipt = method === 'POST' ? await readJson(request) : JSON.parse(url.searchParams.get('receipt') || 'null');
+      const result = await verifyReceipt(receipt, env);
+      return json(result, result.valid ? 200 : 400, API_CORS);
+    } catch {
+      return json({ valid: false, error: 'invalid_receipt' }, 400, API_CORS);
+    }
+  }
+  if (path === '/keys') {
+    if (method !== 'GET') return json({ error: 'method_not_allowed' }, 405, { Allow: 'GET, OPTIONS' });
+    if (!(await checkPublicMetadataLimit(request, env)).allowed) return json({ error: 'rate_limited' }, 429, API_CORS);
+    try { return json({ keys: publicKeys(env) }, 200, API_CORS); } catch { return json({ error: 'keyring_unavailable' }, 503, API_CORS); }
   }
   if (!['GET', 'HEAD'].includes(method)) {
     return json({ error: 'method_not_allowed' }, 405, { Allow: isApi ? 'GET, HEAD, OPTIONS' : 'GET, HEAD' });
   }
   if ((path === '/' || path === '/index.html') && env.ASSETS) return assetHomepage(request, env);
   if (path === '/' || path === '/index.html') return htmlResponse(homepage(Date.now()), method);
-  if (path === '/success') return sensitiveUnavailable();
+  if (path === '/success') {
+    if (!paidEnabled(env)) return sensitiveUnavailable();
+    const sessionId = url.searchParams.get('session_id');
+    if (!/^cs_[A-Za-z0-9_]+$/.test(String(sessionId || ''))) return json({ error: 'invalid_session' }, 400);
+    try {
+      const repository = env.BILLING_REPOSITORY || new D1BillingRepository(env.DB);
+      const delivery = await repository.consumeKeyDelivery(sessionId);
+      if (!delivery) return json({ error: 'key_unavailable_or_already_shown' }, 404);
+      const rawKey = await decryptApiKey(delivery.encrypted_key, delivery.iv, env.KEY_DELIVERY_SECRET);
+      const safeKey = rawKey.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+      return new Response(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="robots" content="noindex,nofollow"><title>API key</title><body><main><h1>Save your API key now</h1><p>It will not be shown again.</p><code>${safeKey}</code></main></body></html>`, {
+        headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store, private', Pragma: 'no-cache', ...SECURITY },
+      });
+    } catch { return json({ error: 'key_delivery_unavailable' }, 503); }
+  }
   if (path === '/robots.txt') return new Response(method === 'HEAD' ? null : 'User-agent: *\nAllow: /\nSitemap: https://spydergoat.com/sitemap.xml\n', { headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
   if (path === '/sitemap.xml') return new Response(method === 'HEAD' ? null : '<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>https://spydergoat.com/</loc></url></urlset>', { headers: { 'Content-Type': 'application/xml; charset=utf-8' } });
   if (isApi) {
-    if (request.headers.has('Authorization')) return json({ error: 'paid_access_paused' }, 503, API_CORS);
     if (method === 'HEAD') return new Response(null, { headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...API_CORS } });
-    const limit = await checkFreeRateLimit(request, env);
-    if (!limit.allowed) return json({ error: 'rate_limited', message: 'Free tier: 1 request per 30 minutes', retry_after: limit.retryAfter }, 429, { 'Retry-After': String(limit.retryAfter), ...API_CORS });
+    const paid = await paidAccess(request, env);
+    if (paid.paid && !paid.allowed) return paidDenied(paid);
+    if (!paid.paid) {
+      const limit = await checkFreeRateLimit(request, env);
+      if (!limit.allowed) return json({ error: 'rate_limited', message: 'Free tier: 10 requests per UTC day', retry_after: limit.retryAfter }, 429, { 'Retry-After': String(limit.retryAfter), ...API_CORS });
+    }
     return new Response(JSON.stringify(buildTimeResponse(Date.now(), path === '/jd')), { headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...API_CORS } });
   }
   return json({ error: 'not_found', endpoints: ['/', '/mjd', '/jd'] }, 404);
 }
 
-export default { fetch: handle };
+export default {
+  fetch: handle,
+  async scheduled(_controller, env) {
+    await purgeExpiredReceiptHashes(env.DB);
+    if (paidEnabled(env)) await runDailyBillingCheck(env);
+  },
+};

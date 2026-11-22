@@ -7,6 +7,10 @@ export default defineConfig({
     proxy: {
       '/mjd': 'http://127.0.0.1:8787',
       '/jd': 'http://127.0.0.1:8787',
+      '/receipt': 'http://127.0.0.1:8787',
+      '/verify': 'http://127.0.0.1:8787',
+      '/keys': 'http://127.0.0.1:8787',
+      '/checkout': 'http://127.0.0.1:8787',
       '/success': 'http://127.0.0.1:8787',
       '/webhook': 'http://127.0.0.1:8787',
     },

@@ -78,7 +78,9 @@ test('client IP ignores spoofable forwarded header when Cloudflare identity is a
   const first = await request('/mjd', { headers: { 'X-Forwarded-For': '1.1.1.1' } }, bindings);
   const second = await request('/mjd', { headers: { 'X-Forwarded-For': '2.2.2.2' } }, bindings);
   assert.equal(first.status, 200);
-  assert.equal(second.status, 429);
+  assert.equal(second.status, 200);
+  for (let index = 0; index < 8; index++) assert.equal((await request('/mjd', {}, bindings)).status, 200);
+  assert.equal((await request('/mjd', {}, bindings)).status, 429);
 });
 
 test('homepage has canonical metadata and strict security headers', async () => {
@@ -114,6 +116,12 @@ test('webhook fails closed when transactional billing is not configured', async 
   assert.equal(response.status, 503);
 });
 
+test('checkout also fails closed when PAID_ENABLED is absent', async () => {
+  const response = await request('/checkout', { method: 'POST' });
+  assert.equal(response.status, 503);
+  assert.equal((await response.json()).error, 'paid_disabled');
+});
+
 test('HEAD, sitemap, robots and route-specific methods are supported', async () => {
   const head = await request('/', { method: 'HEAD' });
   assert.equal(head.status, 200);
@@ -143,4 +151,39 @@ test('public API keeps CORS and returns documented response', async () => {
   assert.equal(typeof body.utc, 'string');
   assert.equal(typeof body.unix, 'number');
   assert.equal(body.source, 'server');
+});
+
+test('paid API keys consume the 5,000-request monthly allowance', async () => {
+  let consumed = 0;
+  const repository = {
+    async findAccountByKeyDigest() { return { id: 'acct_1', active: true }; },
+    async consumeAllowance(accountId) {
+      assert.equal(accountId, 'acct_1');
+      consumed++;
+      return { allowed: consumed === 1 };
+    },
+  };
+  const bindings = { PAID_ENABLED: 'true', BILLING_REPOSITORY: repository };
+  const headers = { Authorization: `Bearer sg_${'a'.repeat(48)}` };
+  assert.equal((await request('/mjd', { headers }, bindings)).status, 200);
+  const capped = await request('/jd', { headers }, bindings);
+  assert.equal(capped.status, 429);
+  assert.equal((await capped.json()).error, 'monthly_cap');
+  assert.equal(consumed, 2);
+});
+
+test('receipt global cap and public metadata rate limits fail closed', async () => {
+  const bindings = {
+    SPYDERGOAT_KV: {
+      async get(key) { return key.startsWith('rate:receipts:global:') ? '10000' : '60'; },
+      async put() { throw new Error('must not increment a capped counter'); },
+    },
+  };
+  const receipt = await request('/receipt', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sha256: 'a'.repeat(64) }),
+  }, bindings);
+  assert.equal(receipt.status, 429);
+  assert.equal((await receipt.json()).error, 'service_daily_cap');
+  assert.equal((await request('/keys', {}, bindings)).status, 429);
+  assert.equal((await request('/verify?receipt=null', {}, bindings)).status, 429);
 });

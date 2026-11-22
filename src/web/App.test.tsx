@@ -97,7 +97,7 @@ describe('SpyderGoat v1.1', () => {
     render(<App />);
     await user.click(screen.getByRole('button', { name: /calibrate/i }));
 
-    expect(await screen.findByText(/rate limit reached.*30 minutes/i)).toBeInTheDocument();
+    expect(await screen.findByText(/rate limit reached/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /try again/i })).toBeEnabled();
   });
 });

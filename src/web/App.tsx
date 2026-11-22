@@ -283,15 +283,14 @@ export default function App() {
             <div className="code-title"><span><i /><i /><i /></span><code>GET /mjd</code></div>
             <pre><code>{responseExample}</code></pre>
           </div>
-          <p className="docs-note">The free endpoint currently allows one request per IP every 30 minutes. <code>/jd</code> returns the same fields plus <code>jd</code>.</p>
+          <p className="docs-note">The best-effort free tier shares 10 requests per IP per UTC day across <code>/mjd</code>, <code>/jd</code>, and <code>/receipt</code>. Rate-limit IP keys remain in KV for roughly 48 hours.</p>
         </section>
 
         <section id="pricing" className="content-section section-wrap">
           <div className="section-heading"><div><span className="kicker">Access</span><h2>Free endpoint available. Paid access paused.</h2></div><p>Billing stays off until transactional accounting, account binding, and key delivery pass supervised rehearsal.</p></div>
           <div className="pricing-grid">
-            <article className="price-card available"><div className="price-top"><span>Free</span><b>Available</b></div><strong>$0</strong><p>One request per IP every 30 minutes. No signup.</p><a className="button primary" href="/mjd">Use /mjd</a></article>
-            <article className="price-card paused"><div className="price-top"><span>Pro</span><b>Paused</b></div><strong>$4.89<small>/month</small></strong><p>5,000 included requests. Checkout remains unavailable during the billing rebuild.</p></article>
-            <article className="price-card paused"><div className="price-top"><span>Wallet</span><b>Paused</b></div><strong>$0.001<small>/request</small></strong><p>Top-ups remain disabled until credits have deterministic account binding and ledger receipts.</p></article>
+            <article className="price-card available"><div className="price-top"><span>Free</span><b>Available</b></div><strong>$0</strong><p>Best-effort 10 shared requests per IP per UTC day. No signup.</p><a className="button primary" href="/mjd">Use /mjd</a></article>
+            <article className="price-card paused"><div className="price-top"><span>Pro</span><b>Paused</b></div><strong>$5<small>/month</small></strong><p>5,000 requests per billing month. Checkout is gated by PAID_ENABLED.</p></article>
           </div>
         </section>
       </main>
