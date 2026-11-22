@@ -12,7 +12,7 @@ export async function authenticateApiKey(repository, rawKey) {
   if (!/^sg_[0-9a-f]{48}$/i.test(String(rawKey || ''))) throw new Error('Invalid API key');
   const digest = await hashApiKey(rawKey);
   const account = await repository.findAccountByKeyDigest(digest);
-  if (!account || account.active === false) throw new Error('Invalid API key');
+  if (!account || !Boolean(account.active)) throw new Error('Invalid API key');
   return account;
 }
 
@@ -50,16 +50,27 @@ export async function consumePaidRequest(repository, accountId) {
 }
 
 export async function processStripeEvent(repository, event, catalog, options = {}) {
-  if (event?.type !== 'checkout.session.completed') return { ignored: true };
   if (!event.id) throw new Error('Stripe event ID is required');
+  if (event.type === 'customer.subscription.deleted' || event.type === 'charge.refunded') {
+    const object = event.data?.object;
+    const customerId = typeof object?.customer === 'string' ? object.customer : object?.customer?.id;
+    if (!customerId) throw new Error('Stripe customer binding is required for revocation');
+    return repository.applyStripeEventOnce(event.id, { kind: 'revoke', customerId, eventType: event.type });
+  }
+  if (event?.type !== 'checkout.session.completed') return { ignored: true };
   const session = event.data?.object;
   const accountId = session?.metadata?.spydergoat_account_id;
   if (!accountId) throw new Error('Deterministic account binding is required');
   const validation = validateCheckoutSession(session, catalog, { livemode: options.livemode, accountId });
   if (!validation.ok) throw new Error(validation.error);
 
+  const credential = validation.item.mode === 'subscription' ? await options.issueCredential?.(session) : undefined;
+  if (validation.item.mode === 'subscription' && !credential) throw new Error('Credential issuance is not configured');
   const command = validation.item.mode === 'subscription'
-    ? { kind: 'provision', accountId, customerId: validation.customerId }
+    ? {
+        kind: 'provision', accountId, customerId: validation.customerId,
+        subscriptionId: session.subscription, checkoutSessionId: session.id, credential,
+      }
     : { kind: 'credit', accountId, customerId: validation.customerId, credits: validation.item.credits };
   const result = await repository.applyStripeEventOnce(event.id, command);
   options.logger?.info?.('stripe_event_processed', { eventId: event.id, type: event.type, replayed: Boolean(result.replayed) });

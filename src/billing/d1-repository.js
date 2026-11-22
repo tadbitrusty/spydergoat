@@ -51,18 +51,47 @@ export class D1BillingRepository {
       statements.push(this.db.prepare(`INSERT INTO wallet_ledger (stripe_event_id, account_id, credit_delta, created_at)
         SELECT ?1, ?2, ?3, ?4 WHERE EXISTS (SELECT 1 FROM stripe_events WHERE event_id = ?1 AND claim_token = ?5 AND status = 'processing')`)
         .bind(eventId, command.accountId, command.credits, created, claim));
-    } else {
+    } else if (command.kind === 'provision') {
       statements.push(this.db.prepare(`INSERT INTO accounts (id, stripe_customer_id, subscription_status, created_at, updated_at)
         SELECT ?1, ?2, 'active', ?3, ?3
         WHERE EXISTS (SELECT 1 FROM stripe_events WHERE event_id = ?4 AND claim_token = ?5 AND status = 'processing')
         ON CONFLICT(id) DO UPDATE SET stripe_customer_id = excluded.stripe_customer_id,
           subscription_status = 'active', updated_at = excluded.updated_at`)
         .bind(command.accountId, command.customerId, created, eventId, claim));
+      statements.push(this.db.prepare(`UPDATE accounts SET stripe_subscription_id = ?1
+        WHERE id = ?2 AND EXISTS (SELECT 1 FROM stripe_events WHERE event_id = ?3 AND claim_token = ?4 AND status = 'processing')`)
+        .bind(command.subscriptionId, command.accountId, eventId, claim));
+      statements.push(this.db.prepare(`INSERT INTO api_credentials (id, account_id, key_digest, display_suffix, created_at)
+        SELECT ?1, ?2, ?3, ?4, ?5 WHERE EXISTS
+          (SELECT 1 FROM stripe_events WHERE event_id = ?6 AND claim_token = ?7 AND status = 'processing')`)
+        .bind(command.credential.id, command.accountId, command.credential.digest, command.credential.suffix, created, eventId, claim));
+      statements.push(this.db.prepare(`INSERT INTO key_deliveries
+        (checkout_session_id, account_id, encrypted_key, iv, expires_at, created_at)
+        SELECT ?1, ?2, ?3, ?4, ?5, ?6 WHERE EXISTS
+          (SELECT 1 FROM stripe_events WHERE event_id = ?7 AND claim_token = ?8 AND status = 'processing')`)
+        .bind(command.checkoutSessionId, command.accountId, command.credential.encryptedKey,
+          command.credential.iv, created + 3600, created, eventId, claim));
+    } else if (command.kind === 'revoke') {
+      statements.push(this.db.prepare(`UPDATE accounts SET subscription_status = 'revoked', updated_at = ?1
+        WHERE stripe_customer_id = ?2 AND EXISTS
+          (SELECT 1 FROM stripe_events WHERE event_id = ?3 AND claim_token = ?4 AND status = 'processing')`)
+        .bind(created, command.customerId, eventId, claim));
+      statements.push(this.db.prepare(`UPDATE api_credentials SET revoked_at = ?1
+        WHERE account_id IN (SELECT id FROM accounts WHERE stripe_customer_id = ?2)
+          AND revoked_at IS NULL AND EXISTS
+          (SELECT 1 FROM stripe_events WHERE event_id = ?3 AND claim_token = ?4 AND status = 'processing')`)
+        .bind(created, command.customerId, eventId, claim));
     }
     statements.push(this.db.prepare(`UPDATE stripe_events SET status = 'processed', processed_at = ?1
       WHERE event_id = ?2 AND claim_token = ?3 AND status = 'processing'`).bind(created, eventId, claim));
     const results = await this.db.batch(statements);
     const claimed = Number(results?.[0]?.meta?.changes || 0) === 1;
     return { replayed: !claimed };
+  }
+
+  async consumeKeyDelivery(checkoutSessionId) {
+    return this.db.prepare(`UPDATE key_deliveries SET consumed_at = unixepoch()
+      WHERE checkout_session_id = ?1 AND consumed_at IS NULL AND expires_at > unixepoch()
+      RETURNING encrypted_key, iv`).bind(checkoutSessionId).first();
   }
 }

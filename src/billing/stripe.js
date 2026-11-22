@@ -40,3 +40,30 @@ export async function verifyStripeSignature(payload, header, secret, nowSeconds 
   const valid = signatures.some(value => constantTimeEqual(expected, hexToBytes(value)));
   return valid ? { valid: true, timestamp } : { valid: false, error: 'Signature mismatch' };
 }
+
+export async function createCheckoutSession(env, accountId, fetcher = fetch) {
+  if (!String(env.STRIPE_SECRET_KEY || '').startsWith('sk_test_')) throw new Error('Stripe test-mode key is required');
+  if (!/^price_[A-Za-z0-9_]+$/.test(String(env.STRIPE_PRO_PRICE_ID || ''))) throw new Error('Stripe price is not configured');
+  const origin = String(env.PUBLIC_ORIGIN || '').replace(/\/$/, '');
+  if (!origin.startsWith('https://') && !origin.startsWith('http://localhost')) throw new Error('Public origin is not configured');
+  const body = new URLSearchParams({
+    mode: 'subscription',
+    'line_items[0][price]': env.STRIPE_PRO_PRICE_ID,
+    'line_items[0][quantity]': '1',
+    success_url: `${origin}/success?session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${origin}/#pricing`,
+    'metadata[spydergoat_sku]': 'subscription',
+    'metadata[spydergoat_account_id]': accountId,
+  });
+  const response = await fetcher('https://api.stripe.com/v1/checkout/sessions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${env.STRIPE_SECRET_KEY}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body,
+  });
+  const session = await response.json();
+  if (!response.ok || !session?.url || !session?.id) throw new Error('Stripe checkout creation failed');
+  return session;
+}

@@ -14,8 +14,9 @@
     "test:worker": "node --test test/*.test.js",
     "test:web": "vitest run",
     "typecheck": "tsc --noEmit",
-    "check": "npm run typecheck && node --check src/api/worker.js && node --check src/billing/d1-repository.js && node --check src/billing/service.js && node --check src/billing/stripe.js",
+    "check": "npm run typecheck && node --check src/api/worker.js && node --check src/receipts.js && node --check src/billing/d1-repository.js && node --check src/billing/key-delivery.js && node --check src/billing/service.js && node --check src/billing/stripe.js",
     "preview": "vite preview",
+    "db:migrate:local": "wrangler d1 migrations apply spydergoat-db --local",
     "deploy": "npm run build && wrangler deploy"
   },
   "author": "Adam",

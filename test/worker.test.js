@@ -78,7 +78,9 @@ test('client IP ignores spoofable forwarded header when Cloudflare identity is a
   const first = await request('/mjd', { headers: { 'X-Forwarded-For': '1.1.1.1' } }, bindings);
   const second = await request('/mjd', { headers: { 'X-Forwarded-For': '2.2.2.2' } }, bindings);
   assert.equal(first.status, 200);
-  assert.equal(second.status, 429);
+  assert.equal(second.status, 200);
+  for (let index = 0; index < 8; index++) assert.equal((await request('/mjd', {}, bindings)).status, 200);
+  assert.equal((await request('/mjd', {}, bindings)).status, 429);
 });
 
 test('homepage has canonical metadata and strict security headers', async () => {
@@ -112,6 +114,12 @@ test('success route never calls Stripe or reveals a key while paid flow is gated
 test('webhook fails closed when transactional billing is not configured', async () => {
   const response = await request('/webhook', { method: 'POST', body: '{}', headers: { 'stripe-signature': 't=1,v1=x' } });
   assert.equal(response.status, 503);
+});
+
+test('checkout also fails closed when PAID_ENABLED is absent', async () => {
+  const response = await request('/checkout', { method: 'POST' });
+  assert.equal(response.status, 503);
+  assert.equal((await response.json()).error, 'paid_disabled');
 });
 
 test('HEAD, sitemap, robots and route-specific methods are supported', async () => {

@@ -37,7 +37,10 @@ test('D1 provisioning upserts the bound account before marking the event process
     prepare(text) { sql.push(text); return { bind() { return { text }; } }; },
     async batch(statements) { return statements.map(() => ({ success: true, meta: { changes: 1 } })); },
   };
-  const result = await new D1BillingRepository(db).applyStripeEventOnce('evt_1', { kind: 'provision', accountId: 'acct_1', customerId: 'cus_1' });
+  const result = await new D1BillingRepository(db).applyStripeEventOnce('evt_1', {
+    kind: 'provision', accountId: 'acct_1', customerId: 'cus_1', subscriptionId: 'sub_1', checkoutSessionId: 'cs_1',
+    credential: { id: 'cred_1', digest: 'digest', suffix: 'suffix', encryptedKey: 'ciphertext', iv: 'iv' },
+  });
   assert.equal(result.replayed, false);
   assert.match(sql.join('\n'), /INSERT INTO accounts/i);
   assert.match(sql.join('\n'), /ON CONFLICT\s*\(id\) DO UPDATE/i);
