@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createCheckoutSession, verifyStripeSignature } from '../src/billing/stripe.js';
+import { createCheckoutSession, listCompletedCheckoutSessions, retrieveCheckoutSession, verifyStripeSignature } from '../src/billing/stripe.js';
 
 async function signature(payload, secret, timestamp) {
   const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
@@ -43,4 +43,34 @@ test('checkout is test-mode only and creates the fixed subscription request', as
     () => createCheckoutSession({ ...env, STRIPE_SECRET_KEY: ['sk', 'live', 'forbidden'].join('_') }, 'acct_fixture', async () => { throw new Error('must not call'); }),
     /test-mode/i,
   );
+});
+
+test('Checkout Session retrieval explicitly expands line_items', async () => {
+  let seen;
+  const env = { STRIPE_SECRET_KEY: ['sk', 'test', 'fixture'].join('_') };
+  const session = await retrieveCheckoutSession(env, 'cs_fixture', async (url, init) => {
+    seen = { url: new URL(url), init };
+    return new Response(JSON.stringify({ id: 'cs_fixture', line_items: { data: [] } }), {
+      headers: { 'content-type': 'application/json' },
+    });
+  });
+  assert.equal(session.id, 'cs_fixture');
+  assert.equal(seen.url.pathname, '/v1/checkout/sessions/cs_fixture');
+  assert.deepEqual(seen.url.searchParams.getAll('expand[]'), ['line_items']);
+  assert.match(seen.init.headers.Authorization, /^Bearer sk_test_/);
+});
+
+test('daily Checkout reconciliation lists complete sessions with expanded line items', async () => {
+  let seen;
+  const env = { STRIPE_SECRET_KEY: ['sk', 'test', 'fixture'].join('_') };
+  const sessions = await listCompletedCheckoutSessions(env, 1234, async url => {
+    seen = new URL(url);
+    return new Response(JSON.stringify({ data: [{ id: 'cs_1' }], has_more: false }), {
+      headers: { 'content-type': 'application/json' },
+    });
+  });
+  assert.deepEqual(sessions, [{ id: 'cs_1' }]);
+  assert.equal(seen.searchParams.get('status'), 'complete');
+  assert.equal(seen.searchParams.get('created[gte]'), '1234');
+  assert.deepEqual(seen.searchParams.getAll('expand[]'), ['data.line_items']);
 });

@@ -23,14 +23,15 @@ database_id = "7a4439ad-a213-432e-a1cd-e14065f60df2"
 [assets]
 directory = "./dist"
 binding = "ASSETS"
-run_worker_first = ["/", "/index.html", "/mjd", "/jd", "/receipt", "/verify", "/keys", "/checkout", "/success", "/webhook", "/sitemap.xml", "/robots.txt"]
+run_worker_first = ["/", "/index.html", "/mjd", "/jd", "/receipt", "/verify", "/keys", "/checkout", "/success", "/webhook", "/billing/key-resend", "/sitemap.xml", "/robots.txt"]
 
 [vars]
 ENVIRONMENT = "production"
 PAID_ENABLED = "false"
 RECEIPT_RETENTION_DAYS = "90"
 # Secret bindings (never commit values): RECEIPT_PRIVATE_KEY_PKCS8,
-# RECEIPT_KEYRING, KEY_DELIVERY_SECRET, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET.
+# RECEIPT_KEYRING, KEY_DELIVERY_SECRET, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET,
+# BILLING_ADMIN_TOKEN.
 
 [triggers]
 crons = ["17 3 * * *"]

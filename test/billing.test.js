@@ -23,6 +23,17 @@ function validSession(overrides = {}) {
   };
 }
 
+function checkoutOptions(session = validSession(), overrides = {}) {
+  return {
+    livemode: false,
+    retrieveCheckoutSession: async id => {
+      assert.equal(id, session.id);
+      return session;
+    },
+    ...overrides,
+  };
+}
+
 test('checkout validation accepts only the allowlisted paid completed session', () => {
   const result = validateCheckoutSession(validSession(), catalog, { livemode: false, accountId: 'acct_1' });
   assert.equal(result.ok, true);
@@ -79,7 +90,8 @@ test('concurrent allowance accounting does not lose updates or overspend wallet'
 test('duplicate subscription event neither rotates nor creates a second key', async () => {
   const repo = new AtomicRepository();
   const event = { id: 'evt_sub', type: 'checkout.session.completed', data: { object: validSession() } };
-  const options = { livemode: false, issueCredential: async () => ({ id: 'cred', digest: 'digest', suffix: 'suffix' }) };
+  delete event.data.object.line_items;
+  const options = checkoutOptions(validSession(), { issueCredential: async () => ({ id: 'cred', digest: 'digest', suffix: 'suffix' }) });
   assert.equal((await processStripeEvent(repo, event, catalog, options)).replayed, false);
   assert.equal((await processStripeEvent(repo, event, catalog, options)).replayed, true);
   assert.equal(repo.keys, 1);
@@ -101,15 +113,15 @@ test('duplicate top-up event credits exactly once and requires deterministic bin
     line_items: { data: [{ quantity: 1, price: { id: 'price_1k', product: 'prod_1k', unit_amount: 100, currency: 'usd' } }] },
   });
   const event = { id: 'evt_topup', type: 'checkout.session.completed', data: { object: session } };
-  await processStripeEvent(repo, event, catalog, { livemode: false });
-  await processStripeEvent(repo, event, catalog, { livemode: false });
+  await processStripeEvent(repo, event, catalog, checkoutOptions(session));
+  await processStripeEvent(repo, event, catalog, checkoutOptions(session));
   assert.equal(repo.credits, 1000);
 });
 
 test('top-up without deterministic account binding fails closed', async () => {
   const repo = new AtomicRepository();
   const session = validSession({ mode: 'payment', amount_total: 100, metadata: { spydergoat_sku: 'topup_1000' }, line_items: { data: [{ quantity: 1, price: { id: 'price_1k', product: 'prod_1k', unit_amount: 100, currency: 'usd' } }] } });
-  await assert.rejects(() => processStripeEvent(repo, { id: 'evt_bad', type: 'checkout.session.completed', data: { object: session } }, catalog, { livemode: false }), /account binding/i);
+  await assert.rejects(() => processStripeEvent(repo, { id: 'evt_bad', type: 'checkout.session.completed', data: { object: session } }, catalog, checkoutOptions(session)), /account binding/i);
   assert.equal(repo.credits, 0);
 });
 
@@ -129,7 +141,8 @@ test('raw API keys never appear in structured logs', async () => {
   const lines = [];
   const logger = { info(event, fields) { lines.push(JSON.stringify({ event, ...fields })); } };
   const repo = { async applyStripeEventOnce() { return { replayed: false }; } };
-  await processStripeEvent(repo, { id: 'evt_log', type: 'checkout.session.completed', data: { object: validSession() } }, catalog, { livemode: false, logger, issueCredential: async () => ({ id: 'cred', digest: 'digest', suffix: 'suffix' }) });
+  await processStripeEvent(repo, { id: 'evt_log', type: 'checkout.session.completed', data: { object: { id: 'cs_1' } } }, catalog,
+    checkoutOptions(validSession(), { logger, issueCredential: async () => ({ id: 'cred', digest: 'digest', suffix: 'suffix' }) }));
   assert.equal(lines.join('\n').includes(raw), false);
 });
 
@@ -139,4 +152,23 @@ test('refund and subscription cancellation revoke by verified customer binding',
   await processStripeEvent(repo, { id: 'evt_refund', type: 'charge.refunded', data: { object: { customer: 'cus_1' } } }, catalog);
   await processStripeEvent(repo, { id: 'evt_cancel', type: 'customer.subscription.deleted', data: { object: { customer: 'cus_1' } } }, catalog);
   assert.deepEqual(commands.map(command => command.kind), ['revoke', 'revoke']);
+});
+
+test('payment failure and past_due subscription start a seven-day grace period', async () => {
+  const commands = [];
+  const repo = { async applyStripeEventOnce(_id, command) { commands.push(command); return { replayed: false }; } };
+  const now = Date.parse('2026-01-01T00:00:00.000Z');
+  await processStripeEvent(repo, { id: 'evt_failed', type: 'invoice.payment_failed', data: { object: { customer: 'cus_1' } } }, catalog, { now: () => now });
+  await processStripeEvent(repo, { id: 'evt_past_due', type: 'customer.subscription.updated', data: { object: { customer: 'cus_1', status: 'past_due' } } }, catalog, { now: () => now });
+  assert.deepEqual(commands.map(command => command.kind), ['past_due', 'past_due']);
+  assert.deepEqual(commands.map(command => command.graceUntil), [now / 1000 + 7 * 86_400, now / 1000 + 7 * 86_400]);
+});
+
+test('paid invoice restores access and resets the billing period', async () => {
+  let command;
+  const repo = { async applyStripeEventOnce(_id, value) { command = value; return { replayed: false }; } };
+  await processStripeEvent(repo, { id: 'evt_paid', type: 'invoice.paid', data: { object: {
+    customer: 'cus_1', period_start: 100, period_end: 200,
+  } } }, catalog);
+  assert.deepEqual(command, { kind: 'renew', customerId: 'cus_1', periodStart: 100, periodEnd: 200 });
 });

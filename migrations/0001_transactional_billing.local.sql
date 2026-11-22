@@ -49,18 +49,8 @@ CREATE TABLE key_deliveries (
   account_id TEXT NOT NULL REFERENCES accounts(id),
   encrypted_key BLOB NOT NULL,
   iv BLOB NOT NULL,
+  nonce_digest TEXT NOT NULL UNIQUE,
   expires_at INTEGER NOT NULL,
   consumed_at INTEGER,
   created_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
-
--- Receipt rows deliberately contain the submitted digest and signing metadata only.
--- No submitted content or API credential plaintext is stored.
-CREATE TABLE receipt_hashes (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  hash TEXT NOT NULL CHECK (length(hash) = 64),
-  key_id TEXT NOT NULL,
-  issued_at INTEGER NOT NULL,
-  purge_after INTEGER NOT NULL
-);
-CREATE INDEX receipt_hashes_purge_idx ON receipt_hashes(purge_after);

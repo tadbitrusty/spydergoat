@@ -72,6 +72,8 @@ The signature covers canonical JSON containing `hash`, `key_id`, `mjd`, `unix_ms
 | `GET /success?session_id=...` | Shows a provisioned API key once |
 | `POST /webhook` | Verifies Stripe signatures; provisions or revokes API keys |
 
+The free limit is best-effort because Cloudflare KV counters are eventually consistent. `/mjd`, `/jd`, and `/receipt` share one 10-request-per-IP count per UTC day. The rate-limit key contains the Cloudflare-provided IP and is retained in KV for up to roughly 48 hours; submitted receipt content is never accepted. `/verify` and `/keys` are separately limited to 60 requests per IP per minute. Receipt issuance also has a best-effort global safety cap of 10,000 receipts per UTC day.
+
 ## Use Cases
 
 ### AI agents
@@ -95,7 +97,7 @@ Give apps a tiny edge-hosted clock endpoint without shipping NTP clients, timezo
 | Tier | Price | Limit |
 |---|---:|---|
 | Free | $0 | 10 requests / UTC day / IP |
-| Pro | $5/mo | Feature-gated; about $4.55 net after typical Stripe fees |
+| Pro | $5/mo | Feature-gated; 5,000 requests per billing month |
 
 The intended prices remain recorded, but no paid checkout or wallet links are exposed by the local hardened build.
 
@@ -141,6 +143,16 @@ Deploy only when explicitly authorized:
 ```bash
 npm run deploy
 ```
+
+## Billing recovery runbook
+
+Stripe billing is test-mode only. The webhook retrieves `checkout.session.completed` again from Stripe with `line_items` expanded before validating price, product, amount, customer, and account binding. The daily `17 3 * * *` UTC job checks completed paid Checkout Sessions from the previous 48 hours against D1 and emits `paid_checkout_unprovisioned` for each missing provision. It also revokes credentials whose payment grace period has expired.
+
+`invoice.payment_failed` and `customer.subscription.updated` with `past_due` begin a seven-day grace period. Keys work during that period; the daily job revokes them after it ends. `invoice.paid` restores active status, clears the grace deadline, and resets the 5,000-request monthly allowance.
+
+For a customer who did not receive or lost the one-time key, an operator verifies the test-mode Checkout Session and customer, then calls `POST /billing/key-resend` with `X-Admin-Token` and JSON `{"checkout_session_id":"cs_..."}`. The route re-fetches and validates the paid session, revokes the old credential, creates a new one-hour one-time delivery, and returns only its `/success` path—never the key. The operator must provide that path through an approved support channel.
+
+Refund path: verify the test-mode charge, Checkout Session, customer, and account first; create the refund in the Stripe test Dashboard or test CLI; confirm the signed `charge.refunded` webhook returned 2xx; then confirm the matching account and credentials are revoked in D1. If the webhook fails, leave paid access disabled and reconcile before retrying. Never perform these steps in live mode.
 
 ## Launch Note
 

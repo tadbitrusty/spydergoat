@@ -68,7 +68,19 @@ test('receipt rejects content, malformed hashes, tampering, expired and revoked 
   const key = JSON.parse(env.RECEIPT_KEYRING)[0];
   const expired = { ...key, valid_to: '2025-01-01T00:00:00.000Z' };
   assert.equal((await verifyReceipt(receipt, { ...env, RECEIPT_KEYRING: JSON.stringify([expired]) })).error, 'key_outside_validity');
+  const notYetValid = { ...key, valid_from: '2027-01-01T00:00:00.000Z' };
+  assert.equal((await verifyReceipt(receipt, { ...env, RECEIPT_KEYRING: JSON.stringify([notYetValid]) })).error, 'key_outside_validity');
   assert.equal((await verifyReceipt(receipt, { ...env, RECEIPT_KEYRING: JSON.stringify([{ ...key, revoked: true }]) })).error, 'revoked_key');
+});
+
+test('receipt verification rejects a not-yet-valid public key', async () => {
+  const env = await receiptBindings();
+  const signedAt = Date.parse('2026-01-02T00:00:00.000Z');
+  const receipt = await createSignedReceipt('d'.repeat(64), env, signedAt);
+  const key = JSON.parse(env.RECEIPT_KEYRING)[0];
+  const notYetValid = { ...key, valid_from: '2027-01-01T00:00:00.000Z' };
+  const result = await verifyReceipt(receipt, { ...env, RECEIPT_KEYRING: JSON.stringify([notYetValid]) });
+  assert.deepEqual(result, { valid: false, error: 'key_outside_validity' });
 });
 
 test('free receipt limit returns 429 on the eleventh call', async () => {
